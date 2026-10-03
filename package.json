@@ -1,0 +1,21 @@
+{
+  "name": "roland",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "deploy": "node src/deploy-commands.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yWhitee/Roland.git"
+  },
+  "dependencies": {
+    "discord.js": "^14.27.0",
+    "dotenv": "^18.0.5"
+  }
+}
