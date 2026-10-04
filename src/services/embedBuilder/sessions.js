@@ -37,8 +37,8 @@ const touch = (session) => {
   session.timer.unref();
 };
 
-const create = (id, userId, options) => {
-  const session = { ...options, id, userId, state: emptyState() };
+const create = (id, userId, { initial, ...options } = {}) => {
+  const session = { ...options, id, userId, state: { ...emptyState(), ...initial } };
   sessions.set(id, session);
   touch(session);
   return session;

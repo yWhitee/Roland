@@ -11,7 +11,7 @@ const { makeMember, tempDatabase } = require('./helpers/discord');
 
 const commands = load(path.join(__dirname, '..', 'src', 'commands'));
 const components = load(path.join(__dirname, '..', 'src', 'components'));
-const EXPECTED = ['ban', 'clear', 'embed', 'kick', 'logs', 'modlog', 'mute', 'ping', 'ticketcreate', 'unban', 'unmute', 'warn'];
+const EXPECTED = ['ban', 'clear', 'createverify', 'embed', 'kick', 'logs', 'modlog', 'mute', 'ping', 'ticketcreate', 'unban', 'unmute', 'verifyinfo', 'warn'];
 
 test.before(() => database.open(tempDatabase()));
 test.after(() => database.close());
@@ -29,6 +29,12 @@ test('every command loads and builds valid JSON', () => {
 test('/ping is intact', () => {
   const ping = commands.find((command) => command.data.name === 'ping');
   assert.deepEqual(JSON.parse(JSON.stringify(ping.data.toJSON())), { options: [], name: 'ping', description: 'Check the bot connection', type: 1 });
+});
+
+test('/createverify takes a channel picker and a standard/custom choice', () => {
+  const json = commands.find((command) => command.data.name === 'createverify').data.toJSON();
+  assert.deepEqual(json.options.map((option) => [option.name, option.type, option.required]), [['channel', 7, true], ['type', 3, true]]);
+  assert.deepEqual(json.options[1].choices.map((choice) => choice.value), ['standard', 'custom']);
 });
 
 test('/ticketcreate takes a channel and a category ID', () => {
@@ -90,5 +96,8 @@ test('the router applies command levels and leaves ticket buttons open to everyo
   assert.match((await route({ member: makeMember(ROLES.SENIOR_MODERATOR), customId: 'ticketcreate:1:send' }))[0], /do not have permission/);
   assert.match((await route({ member: makeMember(), customId: 'ticket:open' }))[0], /no longer active/);
   assert.match((await route({ member: makeMember(), customId: 'ticket:unknown' }))[0], /no longer supported/);
+  assert.match((await route({ member: makeMember(ROLES.ADMINISTRATOR), commandName: 'createverify' }))[0], /do not have permission/);
+  assert.match((await route({ member: makeMember(ROLES.ADMINISTRATOR), customId: 'createverify:1:send' }))[0], /do not have permission/);
+  assert.match((await route({ member: makeMember(), customId: 'verify:other' }))[0], /no longer supported/);
   assert.deepEqual(await route({ member: makeMember(), customId: 'other:thing' }), []);
 });

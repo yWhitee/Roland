@@ -5,8 +5,8 @@ const { UserError } = require('../../utils/errors');
 
 const send = (channel, payload) => channel.send(payload);
 
-const start = (interaction, { prefix, title = 'Embed Builder', note = null, channel = null, deliver = send }) => {
-  const session = sessions.create(interaction.id, interaction.user.id, { prefix, title, note, channel, deliver });
+const start = (interaction, { prefix, title = 'Embed Builder', note = null, channel = null, initial = {}, deliver = send }) => {
+  const session = sessions.create(interaction.id, interaction.user.id, { prefix, title, note, channel, initial, deliver });
   return interaction.reply({ ...panel(session), flags: MessageFlags.Ephemeral });
 };
 

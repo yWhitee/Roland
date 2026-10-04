@@ -50,6 +50,8 @@ test('command permission matrix', () => {
     embed: ['senior', 'admin', 'owner'],
     logs: ['admin', 'owner'],
     ticketcreate: ['admin', 'owner'],
+    createverify: ['owner'],
+    verifyinfo: ['moderator', 'senior', 'admin', 'owner'],
   };
 
   assert.deepEqual(Object.keys(commands).sort(), Object.keys(allowed).sort());

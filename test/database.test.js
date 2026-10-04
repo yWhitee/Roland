@@ -22,7 +22,7 @@ test('a fresh database is migrated to the latest version', () => {
   const db = database.open(fresh);
   assert.equal(db.pragma('user_version', { simple: true }), database.migrations.length);
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name);
-  for (const table of ['punishments', 'guild_settings', 'ticket_panels', 'ticket_counters', 'tickets']) assert.ok(tables.includes(table), table);
+  for (const table of ['punishments', 'guild_settings', 'ticket_panels', 'ticket_counters', 'tickets', 'verifications', 'verification_panels', 'oauth_states']) assert.ok(tables.includes(table), table);
   database.open(file);
 });
 
@@ -36,13 +36,29 @@ test('an existing version 1 database is upgraded without losing data', () => {
   db.close();
 
   database.open(legacy);
-  assert.equal(database.get().pragma('user_version', { simple: true }), 2);
+  assert.equal(database.get().pragma('user_version', { simple: true }), database.migrations.length);
   assert.equal(punishments.listByUser('g', 'u', 10)[0].reason, 'old');
   assert.equal(guildSettings.get('g').log_channel_id, 'logs');
   assert.equal(tickets.reserve({ guildId: 'g', panelId: null, creatorId: 'u', robloxUsername: 'Player', reason: 'r' }).ticket.number, 1);
 
   database.open(legacy);
-  assert.equal(database.get().pragma('user_version', { simple: true }), 2);
+  assert.equal(database.get().pragma('user_version', { simple: true }), database.migrations.length);
+  database.open(file);
+});
+
+test('an existing version 2 database with tickets is upgraded to add verification tables', () => {
+  const legacy = tempDatabase();
+  const db = new Database(legacy);
+  database.migrations.slice(0, 2).forEach((sql) => db.exec(sql));
+  db.pragma('user_version = 2');
+  db.prepare("INSERT INTO tickets (guild_id, number, creator_id, roblox_username, reason, status, created_at) VALUES ('g', 7, 'u', 'P', 'r', 'OPEN', 1)").run();
+  db.close();
+
+  database.open(legacy);
+  assert.equal(database.get().pragma('user_version', { simple: true }), 3);
+  assert.equal(tickets.findActiveByCreator('g', 'u').number, 7);
+  const tables = database.get().prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name);
+  for (const table of ['verifications', 'verification_panels', 'oauth_states']) assert.ok(tables.includes(table), table);
   database.open(file);
 });
 

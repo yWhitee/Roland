@@ -62,6 +62,34 @@ const migrations = [
   );
   CREATE UNIQUE INDEX tickets_one_active_per_creator ON tickets (guild_id, creator_id) WHERE status IN ('OPEN', 'CLAIMED');
   CREATE INDEX tickets_channel ON tickets (channel_id);`,
+  `CREATE TABLE verifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    discord_id TEXT NOT NULL UNIQUE,
+    roblox_id TEXT NOT NULL UNIQUE,
+    roblox_username TEXT NOT NULL,
+    roblox_display_name TEXT,
+    guild_id TEXT,
+    verified_at INTEGER NOT NULL
+  );
+  CREATE TABLE verification_panels (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    message_id TEXT NOT NULL UNIQUE,
+    type TEXT NOT NULL CHECK (type IN ('standard', 'custom')),
+    created_by TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE TABLE oauth_states (
+    state_hash TEXT PRIMARY KEY NOT NULL,
+    discord_id TEXT NOT NULL,
+    guild_id TEXT NOT NULL,
+    panel_id INTEGER REFERENCES verification_panels (id),
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+  );
+  CREATE INDEX oauth_states_discord ON oauth_states (discord_id);
+  CREATE INDEX oauth_states_expiration ON oauth_states (expires_at);`,
 ];
 
 let db;

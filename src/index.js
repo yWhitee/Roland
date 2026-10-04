@@ -1,8 +1,10 @@
 const path = require('node:path');
 const { Client, Collection, GatewayIntentBits } = require('discord.js');
-const { token } = require('./config');
+const config = require('./config');
 const database = require('./database');
 const load = require('./loader');
+const verification = require('./services/verification');
+const web = require('./web/server');
 
 database.open();
 
@@ -21,9 +23,15 @@ for (const event of load(path.join(__dirname, 'events'))) {
   });
 }
 
+if (verification.configure({ ...config.roblox, client })) {
+  web.start({ [verification.callbackPath()]: verification.handleCallback }, config.oauthServer);
+} else {
+  console.log('Roblox verification is disabled until ROBLOX_CLIENT_ID, ROBLOX_CLIENT_SECRET and ROBLOX_REDIRECT_URI are set.');
+}
+
 process.on('unhandledRejection', (error) => console.error('Unhandled rejection:', error));
 
-client.login(token).catch((error) => {
+client.login(config.token).catch((error) => {
   console.error(`Failed to connect: ${error.message}`);
   process.exit(1);
 });

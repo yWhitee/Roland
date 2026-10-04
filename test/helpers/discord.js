@@ -42,6 +42,7 @@ const makeTextChannel = (guild, { name = 'channel', parent = null, permissionOve
     edits: 0,
     deleted: false,
     isTextBased: () => true,
+    permissionsFor: () => ({ has: () => true }),
     toString: () => `<#${id}>`,
     send: async (payload) => {
       const message = makeMessage(channel, payload);
@@ -68,10 +69,12 @@ const makeTextChannel = (guild, { name = 'channel', parent = null, permissionOve
 
 const makeGuild = ({ roles = [] } = {}) => {
   const cache = new Map();
+  const members = new Map();
   const banned = new Set();
   const guild = {
     id: snowflake(),
     name: 'Test Server',
+    ownerId: snowflake(),
     client: { user: { id: BOT_ID } },
     banned,
     roles: { cache: new Map(roles.map((id) => [id, { id }])) },
@@ -85,7 +88,11 @@ const makeGuild = ({ roles = [] } = {}) => {
         banned.delete(id);
       },
     },
-    members: { ban: async (id) => banned.add(id) },
+    members: {
+      cache: members,
+      ban: async (id) => banned.add(id),
+      fetch: async (options) => members.get(options?.user ?? options) ?? Promise.reject(apiError(10007)),
+    },
     channels: {
       cache,
       fetch: async (id) => cache.get(id) ?? Promise.reject(apiError(10003)),
@@ -107,17 +114,27 @@ const addCategory = (guild, name = 'Tickets') => {
   return category;
 };
 
-const makeMember = (role, { dm = true } = {}) => {
+const makeMember = (role, { dm = true, globalName = null } = {}) => {
   const id = snowflake();
   const state = { kicked: false, timeoutUntil: null, dms: [] };
-  return {
+  const roles = new Map(role ? [[role, {}]] : []);
+  const member = {
     id,
     state,
+    nickname: null,
     client: { user: { id: BOT_ID } },
-    roles: { cache: new Map(role ? [[role, {}]] : []) },
+    roles: {
+      cache: roles,
+      add: async (roleId) => roles.set(roleId, {}),
+    },
+    setNickname: async (nickname) => {
+      member.nickname = nickname;
+    },
     user: {
       id,
       tag: `user${id}`,
+      username: `user${id}`,
+      globalName,
       send: async (payload) => {
         if (!dm) throw apiError(50007, 403);
         const message = { payload, deleted: false, delete: async () => (message.deleted = true) };
@@ -136,13 +153,16 @@ const makeMember = (role, { dm = true } = {}) => {
       state.timeoutUntil = value === null ? null : Date.now() + value;
     },
   };
+  return member;
 };
 
 const makeInteraction = ({ guild, member, customId = '', message = null, fields = {} }) => {
   const calls = { replies: [], modals: [] };
   const interaction = {
+    id: snowflake(),
     customId,
     guild,
+    guildId: guild?.id,
     member,
     user: member.user,
     message,
