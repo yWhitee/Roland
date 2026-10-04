@@ -170,25 +170,25 @@ test('functions have independent flags and normal warnings never change AutoMod 
   assert.ok(warnings.filter((record) => record.source === 'automod').every((record) => record.moderator_id === BOT_ID));
 });
 
-test('Anti-Spam: 5 messages in 5 seconds escalates delete, warn, then a 3 hour mute', async () => {
+test('Anti-Spam: 10 messages in 5 seconds escalates delete, warn, then a 3 hour mute', async () => {
   const { guild } = setup({ enable: ['antispam'] });
   const channel = await channelOf(guild);
   const member = user(guild);
 
-  assert.deepEqual(await burst(guild, channel, member, { count: 4, start: T0, step: 1000 }), [], '4 messages are fine');
-  assert.deepEqual(await burst(guild, channel, user(guild), { count: 5, start: T0, step: 1500 }), [], '5 messages over 6 seconds are fine');
+  assert.deepEqual(await burst(guild, channel, member, { count: 9, start: T0, step: 500 }), [], '9 messages are fine');
+  assert.deepEqual(await burst(guild, channel, user(guild), { count: 10, start: T0, step: 600 }), [], '10 messages over 5.4 seconds are fine');
 
   const [first] = await burst(guild, channel, member, { count: 1, start: T0 + 4500, step: 0 });
   assert.equal(first.level, 1);
-  assert.equal(first.deleted, 5);
+  assert.equal(first.deleted, 10);
   assert.equal(first.warning, null);
-  assert.equal(channel.bulkDeleted.length, 5);
+  assert.equal(channel.bulkDeleted.length, 10);
   assert.equal(dm(member).title, 'Your message was removed by AutoMod');
   assert.match(dm(member).description, /in #general were removed by AutoMod/);
   assert.match(dm(member).description, /\*\*Reason:\*\* Spam/);
   assert.match(dm(member).description, /AutoMod status:\*\* 1\/3/);
 
-  const [second] = await burst(guild, channel, member, { count: 5, start: T0 + 60_000, step: 500 });
+  const [second] = await burst(guild, channel, member, { count: 10, start: T0 + 60_000, step: 400 });
   assert.equal(second.level, 2);
   assert.equal(second.warning.source, 'automod');
   assert.equal(second.warning.automod_function, 'antispam');
@@ -196,7 +196,7 @@ test('Anti-Spam: 5 messages in 5 seconds escalates delete, warn, then a 3 hour m
   assert.equal(dm(member).title, 'You have received an AutoMod warning');
   assert.match(dm(member).description, /Your warning has been recorded in the server moderation log/);
 
-  const [third] = await burst(guild, channel, member, { count: 5, start: T0 + 120_000, step: 500 });
+  const [third] = await burst(guild, channel, member, { count: 10, start: T0 + 120_000, step: 400 });
   assert.equal(third.level, 3);
   assert.equal(third.mute.duration, '3h');
   assert.equal(third.mute.source, 'automod');
@@ -482,8 +482,8 @@ test('AutoMod warnings appear in /modlog marked as AutoMod', async () => {
   const channel = await channelOf(guild);
   const member = user(guild);
   await moderation.warn({ guild, moderator: user(guild, ROLES.MODERATOR), target: { user: member.user, member }, reason: 'Manual warning' });
-  await burst(guild, channel, member, { count: 5, start: T0, step: 100 });
-  await burst(guild, channel, member, { count: 5, start: T0 + 60_000, step: 100 });
+  await burst(guild, channel, member, { count: 10, start: T0, step: 100 });
+  await burst(guild, channel, member, { count: 10, start: T0 + 60_000, step: 100 });
 
   const page = modlog.render(guild.id, member.id, 0).embeds[0].toJSON();
   const automodField = page.fields.find((field) => field.name.includes('Warn (AutoMod)'));
@@ -567,10 +567,10 @@ test('raid lockdown locks only flooded channels, keeps staff access and restores
   await startRaid(guild);
 
   const raiders = [user(guild, MEMBER_ROLE), user(guild, MEMBER_ROLE), user(guild)];
-  await burst(guild, general, raiders[0], { count: 5, start: T0 + 60_000, step: 100 });
-  await burst(guild, general, raiders[1], { count: 5, start: T0 + 61_000, step: 100 });
+  await burst(guild, general, raiders[0], { count: 10, start: T0 + 60_000, step: 100 });
+  await burst(guild, general, raiders[1], { count: 10, start: T0 + 61_000, step: 100 });
   assert.equal(general.permissionOverwrites.edits.length, 0, 'two users are not enough');
-  await burst(guild, general, raiders[2], { count: 5, start: T0 + 62_000, step: 100 });
+  await burst(guild, general, raiders[2], { count: 10, start: T0 + 62_000, step: 100 });
 
   const everyone = general.permissionOverwrites.cache.get(guild.id);
   for (const permission of ['SendMessages', 'SendMessagesInThreads', 'CreatePublicThreads', 'CreatePrivateThreads']) {
@@ -614,10 +614,10 @@ test('raid monitoring respects whitelists and disabling Anti-Raid ends the alert
   await startRaid(guild);
   automodWhitelist.add({ guildId: guild.id, functionId: 'antiraid', targetType: 'role', targetId: MEMBER_ROLE, createdBy: 'admin' });
 
-  for (let index = 0; index < 3; index++) await burst(guild, channel, user(guild, MEMBER_ROLE), { count: 5, start: T0 + 60_000 + index * 1000, step: 100 });
+  for (let index = 0; index < 3; index++) await burst(guild, channel, user(guild, MEMBER_ROLE), { count: 10, start: T0 + 60_000 + index * 1000, step: 100 });
   assert.equal(automodRaids.lockdowns(guild.id).length, 0, 'whitelisted users do not trigger lockdowns');
 
-  for (let index = 0; index < 3; index++) await burst(guild, channel, user(guild), { count: 5, start: T0 + 70_000 + index * 1000, step: 100 });
+  for (let index = 0; index < 3; index++) await burst(guild, channel, user(guild), { count: 10, start: T0 + 70_000 + index * 1000, step: 100 });
   assert.equal(automodRaids.lockdowns(guild.id).length, 1);
 
   await automod.setEnabled(guild, 'antiraid', false, 'admin');
@@ -633,7 +633,7 @@ test('floods inside threads lock the parent channel', async () => {
   guild.channels.cache.set(thread.id, thread);
   await startRaid(guild);
 
-  for (let index = 0; index < 3; index++) await burst(guild, thread, user(guild), { count: 5, start: T0 + 60_000 + index * 1000, step: 100 });
+  for (let index = 0; index < 3; index++) await burst(guild, thread, user(guild), { count: 10, start: T0 + 60_000 + index * 1000, step: 100 });
   assert.equal(automodRaids.lockdowns(guild.id)[0].channel_id, parent.id);
   assert.ok(parent.permissionOverwrites.cache.get(guild.id).deny.has(PermissionFlagsBits.SendMessagesInThreads));
 });
@@ -642,7 +642,7 @@ test('a restart after an expired raid restores locked channels', async () => {
   const { guild } = setup({ enable: ['antiraid'] });
   const channel = await channelOf(guild);
   await startRaid(guild);
-  for (let index = 0; index < 3; index++) await burst(guild, channel, user(guild), { count: 5, start: T0 + 60_000 + index * 1000, step: 100 });
+  for (let index = 0; index < 3; index++) await burst(guild, channel, user(guild), { count: 10, start: T0 + 60_000 + index * 1000, step: 100 });
   assert.ok(channel.permissionOverwrites.cache.get(guild.id).deny.has(PermissionFlagsBits.SendMessages));
 
   restart();
