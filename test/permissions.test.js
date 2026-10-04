@@ -53,9 +53,9 @@ test('command permission matrix', () => {
     ticketcreate: ['admin', 'owner'],
     createverify: ['owner'],
     verifyinfo: ['moderator', 'senior', 'admin', 'owner'],
-    automod: ['senior', 'admin', 'owner'],
-    automodwhitelist: ['senior', 'admin', 'owner'],
-    automodlist: ['senior', 'admin', 'owner'],
+    automod: ['admin', 'owner'],
+    automodwhitelist: ['admin', 'owner'],
+    automodlist: ['moderator', 'senior', 'admin', 'owner'],
     verify: ['member', 'support', 'moderator', 'senior', 'admin', 'owner'],
   };
 

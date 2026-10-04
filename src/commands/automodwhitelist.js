@@ -6,7 +6,7 @@ const { successEmbed } = require('../utils/embeds');
 const { UserError } = require('../utils/errors');
 
 module.exports = {
-  level: Automod.ADMIN,
+  level: Automod.CONFIGURE,
   data: new SlashCommandBuilder()
     .setName('automodwhitelist')
     .setDescription('Let a user or role bypass one AutoMod function')

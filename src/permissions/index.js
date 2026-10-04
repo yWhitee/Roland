@@ -42,7 +42,8 @@ const Tickets = {
 };
 
 const Automod = {
-  ADMIN: Level.SENIOR_MODERATOR,
+  CONFIGURE: Level.ADMINISTRATOR,
+  VIEW: Level.MODERATOR,
   IMMUNE: Level.SUPPORT,
   ALERTED: Level.SUPPORT,
 };

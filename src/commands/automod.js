@@ -6,7 +6,7 @@ const { successEmbed } = require('../utils/embeds');
 const { UserError } = require('../utils/errors');
 
 module.exports = {
-  level: Automod.ADMIN,
+  level: Automod.CONFIGURE,
   data: new SlashCommandBuilder()
     .setName('automod')
     .setDescription('Enable or disable an AutoMod function')
