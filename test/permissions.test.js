@@ -61,6 +61,7 @@ test('command permission matrix', () => {
     leaderboard: ['member', 'support', 'moderator', 'senior', 'admin', 'owner'],
     levelset: ['admin', 'owner'],
     levelsystem: ['owner'],
+    play: ['member', 'support', 'moderator', 'senior', 'admin', 'owner'],
   };
 
   assert.deepEqual(Object.keys(commands).sort(), Object.keys(allowed).sort());

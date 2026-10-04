@@ -1,14 +1,11 @@
 const path = require('node:path');
-const { REST, Routes } = require('discord.js');
+const { REST } = require('discord.js');
+const { registerCommands } = require('./commandRegistration');
 const { token, clientId, guildId } = require('./config');
 const load = require('./loader');
 
-const commands = load(path.join(__dirname, 'commands')).map((command) => command.data.toJSON());
-
-new REST()
-  .setToken(token)
-  .put(Routes.applicationGuildCommands(clientId, guildId), { body: commands })
-  .then((data) => console.log(`Registered ${data.length} command(s) in guild ${guildId}`))
+registerCommands(new REST().setToken(token), { clientId, guildId, commands: load(path.join(__dirname, 'commands')) })
+  .then(({ guild, global }) => console.log(`Registered ${guild} guild command(s) in guild ${guildId} and ${global} global command(s)`))
   .catch((error) => {
     console.error(`Failed to register commands: ${error.message}`);
     process.exit(1);

@@ -2,9 +2,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const path = require('node:path');
-const { Collection, REST, Routes } = require('discord.js');
+const { ButtonStyle, Collection, MessageFlags, REST } = require('discord.js');
 const database = require('../src/database');
 const interactionCreate = require('../src/events/interactionCreate');
+const { registerCommands } = require('../src/commandRegistration');
 const load = require('../src/loader');
 const { ROLES } = require('../src/permissions');
 const { makeMember, tempDatabase } = require('./helpers/discord');
@@ -22,10 +23,10 @@ test.after(() => database.close());
 test('every command loads and builds valid JSON', () => {
   const names = commands.map((command) => command.data.toJSON().name);
   assert.equal(new Set(names).size, names.length);
-  assert.deepEqual(names.sort(), EXPECTED);
+  assert.deepEqual(names.sort(), [...EXPECTED, 'play'].sort());
   for (const command of commands) {
     assert.equal(typeof command.execute, 'function', command.data.name);
-    if (!['ping', 'verify', 'level', 'leaderboard'].includes(command.data.name)) assert.ok(command.level > 0, command.data.name);
+    if (!['ping', 'verify', 'level', 'leaderboard', 'play'].includes(command.data.name)) assert.ok(command.level > 0, command.data.name);
   }
 });
 
@@ -57,30 +58,36 @@ test('/ticketcreate takes a channel and a category ID', () => {
   assert.deepEqual(json.options.map((option) => [option.name, option.required]), [['channel', true], ['categoryid', true]]);
 });
 
-test('slash commands are registered as guild commands', async () => {
-  const body = commands.map((command) => command.data.toJSON());
-  const received = await new Promise((resolve, reject) => {
-    const server = http.createServer((request, response) => {
-      let data = '';
-      request.on('data', (chunk) => (data += chunk));
-      request.on('end', () => {
-        response.setHeader('content-type', 'application/json');
-        response.end(data);
-        server.close();
-        resolve({ method: request.method, url: request.url, body: JSON.parse(data) });
-      });
-    });
-    server.listen(0, '127.0.0.1', () => {
-      new REST({ api: `http://127.0.0.1:${server.address().port}` })
-        .setToken('test')
-        .put(Routes.applicationGuildCommands('100000000000000001', '100000000000000002'), { body })
-        .catch(reject);
+test('existing commands are registered as guild commands and /play as a global command', async () => {
+  const requests = [];
+  const server = http.createServer((request, response) => {
+    let data = '';
+    request.on('data', (chunk) => (data += chunk));
+    request.on('end', () => {
+      requests.push({ method: request.method, url: request.url, body: JSON.parse(data) });
+      response.setHeader('content-type', 'application/json');
+      response.end(data);
     });
   });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 
-  assert.equal(received.method, 'PUT');
-  assert.equal(received.url, '/v10/applications/100000000000000001/guilds/100000000000000002/commands');
-  assert.deepEqual(received.body.map((command) => command.name).sort(), EXPECTED);
+  try {
+    const rest = new REST({ api: `http://127.0.0.1:${server.address().port}` }).setToken('test');
+    const counts = await registerCommands(rest, { clientId: '100000000000000001', guildId: '100000000000000002', commands });
+    assert.deepEqual(counts, { guild: EXPECTED.length, global: 1 });
+  } finally {
+    server.close();
+  }
+
+  const guild = requests.find((request) => request.url === '/v10/applications/100000000000000001/guilds/100000000000000002/commands');
+  const global = requests.find((request) => request.url === '/v10/applications/100000000000000001/commands');
+  assert.equal(requests.length, 2);
+  assert.ok(requests.every((request) => request.method === 'PUT'));
+  assert.deepEqual(guild.body.map((command) => command.name).sort(), EXPECTED, 'existing commands stay guild commands');
+  assert.ok(!guild.body.some((command) => command.name === 'play'), 'no duplicate /play guild command');
+  assert.deepEqual(global.body.map((command) => command.name), ['play'], 'only /play is global');
+  assert.deepEqual(global.body[0].contexts, [0, 1]);
+  assert.equal(global.body[0].default_member_permissions, undefined, 'no permission restriction');
 });
 
 const route = async ({ member, customId, commandName }) => {
@@ -115,4 +122,41 @@ test('the router applies command levels and leaves ticket buttons open to everyo
   assert.match((await route({ member: makeMember(ROLES.ADMINISTRATOR), customId: 'createverify:1:send' }))[0], /do not have permission/);
   assert.match((await route({ member: makeMember(), customId: 'verify:other' }))[0], /no longer supported/);
   assert.deepEqual(await route({ member: makeMember(), customId: 'other:thing' }), []);
+});
+
+const play = async (interaction) => {
+  const replies = [];
+  const sent = [];
+  await interactionCreate.execute({
+    client: { commands: new Collection(commands.map((command) => [command.data.name, command])), components: new Collection() },
+    commandName: 'play',
+    channel: { send: async (payload) => sent.push(payload) },
+    deferred: false,
+    replied: false,
+    isChatInputCommand: () => true,
+    isMessageComponent: () => false,
+    isModalSubmit: () => false,
+    reply: async (payload) => replies.push(payload),
+    ...interaction,
+  });
+  return { reply: replies[0], sent };
+};
+
+test('/play answers anyone privately with a Play on Roblox link button', async () => {
+  const contexts = {
+    'member without roles': { member: makeMember(), inCachedGuild: () => true },
+    Member: { member: makeMember('1555596685462479048'), inCachedGuild: () => true },
+    Owner: { member: makeMember(ROLES.CREATOR), inCachedGuild: () => true },
+    'direct message': { member: null, user: { id: '123456789012345678' }, inCachedGuild: () => false },
+  };
+
+  for (const [name, context] of Object.entries(contexts)) {
+    const { reply, sent } = await play(context);
+    assert.ok(reply, `${name}: replied`);
+    assert.equal(reply.flags, MessageFlags.Ephemeral, `${name}: ephemeral`);
+    assert.match(reply.content, /Go play \*\*Slime Odyssey: Anime Realms\*\*!/);
+    const [button] = reply.components[0].toJSON().components;
+    assert.deepEqual([button.style, button.label, button.url], [ButtonStyle.Link, 'Play on Roblox', 'https://www.roblox.com/games/138399961471218']);
+    assert.equal(sent.length, 0, `${name}: nothing is sent publicly`);
+  }
 });

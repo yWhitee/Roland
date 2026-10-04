@@ -7,7 +7,7 @@ const route = (interaction) => {
   const { commands, components } = interaction.client;
   if (interaction.isChatInputCommand()) {
     const command = commands.get(interaction.commandName);
-    return command && { level: command.level, run: command.execute };
+    return command && { level: command.level, global: command.global, run: command.execute };
   }
 
   const prefix = interaction.customId.split(':')[0];
@@ -26,7 +26,7 @@ module.exports = {
     if (!handler) return;
 
     try {
-      if (!interaction.inCachedGuild()) throw new UserError('This can only be used inside a server.');
+      if (!handler.global && !interaction.inCachedGuild()) throw new UserError('This can only be used inside a server.');
       permissions.assertCommand(interaction.member, handler.level);
       await handler.run(interaction);
     } catch (error) {
