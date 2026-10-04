@@ -4,6 +4,7 @@ const config = require('./config');
 const database = require('./database');
 const { resolveIntents } = require('./intents');
 const load = require('./loader');
+const presence = require('./presence');
 const automod = require('./services/automod');
 const verification = require('./services/verification');
 const web = require('./web/server');
@@ -15,7 +16,7 @@ const start = async () => {
 
   const { intents, capabilities } = await resolveIntents(config.token);
   automod.configure(capabilities);
-  const client = new Client({ intents });
+  const client = new Client({ intents, presence: presence.configure({ applicationId: config.clientId }) });
 
   client.commands = new Collection(load(path.join(__dirname, 'commands')).map((command) => [command.data.name, command]));
   client.components = new Collection(load(path.join(__dirname, 'components')).map((component) => [component.prefix, component]));
