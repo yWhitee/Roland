@@ -52,6 +52,9 @@ test('command permission matrix', () => {
     ticketcreate: ['admin', 'owner'],
     createverify: ['owner'],
     verifyinfo: ['moderator', 'senior', 'admin', 'owner'],
+    automod: ['senior', 'admin', 'owner'],
+    automodwhitelist: ['senior', 'admin', 'owner'],
+    automodlist: ['senior', 'admin', 'owner'],
   };
 
   assert.deepEqual(Object.keys(commands).sort(), Object.keys(allowed).sort());

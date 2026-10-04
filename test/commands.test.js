@@ -11,7 +11,10 @@ const { makeMember, tempDatabase } = require('./helpers/discord');
 
 const commands = load(path.join(__dirname, '..', 'src', 'commands'));
 const components = load(path.join(__dirname, '..', 'src', 'components'));
-const EXPECTED = ['ban', 'clear', 'createverify', 'embed', 'kick', 'logs', 'modlog', 'mute', 'ping', 'ticketcreate', 'unban', 'unmute', 'verifyinfo', 'warn'];
+const EXPECTED = [
+  'automod', 'automodlist', 'automodwhitelist', 'ban', 'clear', 'createverify', 'embed', 'kick', 'logs',
+  'modlog', 'mute', 'ping', 'ticketcreate', 'unban', 'unmute', 'verifyinfo', 'warn',
+];
 
 test.before(() => database.open(tempDatabase()));
 test.after(() => database.close());
@@ -35,6 +38,18 @@ test('/createverify takes a channel picker and a standard/custom choice', () => 
   const json = commands.find((command) => command.data.name === 'createverify').data.toJSON();
   assert.deepEqual(json.options.map((option) => [option.name, option.type, option.required]), [['channel', 7, true], ['type', 3, true]]);
   assert.deepEqual(json.options[1].choices.map((choice) => choice.value), ['standard', 'custom']);
+});
+
+test('AutoMod commands use the central Function ID list', () => {
+  const { FUNCTIONS } = require('../src/services/automod/functions');
+  const ids = FUNCTIONS.map((fn) => fn.id);
+  assert.deepEqual(ids.sort(), ['antiduplicate', 'antiemojispam', 'antiflood', 'antiinvite', 'antimassping', 'antiraid', 'antispam']);
+  for (const name of ['automod', 'automodwhitelist']) {
+    const json = commands.find((command) => command.data.name === name).data.toJSON();
+    assert.deepEqual(json.options.find((option) => option.name === 'function').choices.map((choice) => choice.value).sort(), ids);
+  }
+  const whitelist = commands.find((command) => command.data.name === 'automodwhitelist').data.toJSON();
+  assert.deepEqual(whitelist.options.map((option) => [option.name, option.type, Boolean(option.required)]), [['target', 9, true], ['function', 3, true], ['state', 3, false]]);
 });
 
 test('/ticketcreate takes a channel and a category ID', () => {

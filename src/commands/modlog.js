@@ -1,7 +1,7 @@
 const { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags, SlashCommandBuilder } = require('discord.js');
 const { Level } = require('../permissions');
 const moderation = require('../services/moderation');
-const { ACTIONS, Colors, describe } = require('../utils/embeds');
+const { Colors, describe, recordLabel } = require('../utils/embeds');
 const options = require('../utils/options');
 const { resolveUser } = require('../utils/users');
 
@@ -14,7 +14,7 @@ const render = (guildId, userId, requestedPage) => {
     .setColor(Colors.info)
     .setTitle('Moderation history')
     .setDescription(`**User:** <@${userId}> (\`${userId}\`)\n**Total records:** ${total}${total ? '' : '\n\nNo punishments recorded.'}`)
-    .addFields(records.map((record) => ({ name: `#${record.id} • ${ACTIONS[record.type].label}`, value: describe(record, { user: false }) })))
+    .addFields(records.map((record) => ({ name: `#${record.id} • ${recordLabel(record)}`, value: describe(record, { user: false }) })))
     .setFooter({ text: `Page ${page + 1} of ${pages}` });
 
   const navigation = new ActionRowBuilder().addComponents(

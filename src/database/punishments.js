@@ -6,8 +6,8 @@ const findById = (id) => toRecord(database.get().prepare('SELECT * FROM punishme
 
 const create = (data) => {
   const { lastInsertRowid } = database.get().prepare(`
-    INSERT INTO punishments (type, guild_id, user_id, moderator_id, reason, duration, created_at, expires_at, active, channel_id, metadata)
-    VALUES (@type, @guildId, @userId, @moderatorId, @reason, @duration, @createdAt, @expiresAt, @active, @channelId, @metadata)
+    INSERT INTO punishments (type, guild_id, user_id, moderator_id, reason, duration, created_at, expires_at, active, channel_id, metadata, source, automod_function)
+    VALUES (@type, @guildId, @userId, @moderatorId, @reason, @duration, @createdAt, @expiresAt, @active, @channelId, @metadata, @source, @automodFunction)
   `).run({
     type: data.type,
     guildId: data.guildId,
@@ -20,6 +20,8 @@ const create = (data) => {
     active: data.active ? 1 : 0,
     channelId: data.channelId ?? null,
     metadata: data.metadata ? JSON.stringify(data.metadata) : null,
+    source: data.source ?? 'moderator',
+    automodFunction: data.automodFunction ?? null,
   });
 
   return findById(lastInsertRowid);

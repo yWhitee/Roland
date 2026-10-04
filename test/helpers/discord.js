@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { ChannelType, Collection, PermissionFlagsBits } = require('discord.js');
+const { ChannelType, Collection, PermissionFlagsBits, PermissionsBitField } = require('discord.js');
 
 const BOT_ID = '900000000000000000';
 let nextId = 100000000000000000n;
@@ -28,6 +28,29 @@ const makeMessage = (channel, payload) => {
   return message;
 };
 
+const makeOverwriteManager = () => {
+  const cache = new Map();
+  const manager = {
+    cache,
+    edits: [],
+    set: (id, type, allow = [], deny = []) => cache.set(id, { id, type, allow: new PermissionsBitField(allow), deny: new PermissionsBitField(deny) }),
+    edit: async (id, options, { type } = {}) => {
+      const current = cache.get(id);
+      const allow = new PermissionsBitField(current?.allow.bitfield ?? 0n);
+      const deny = new PermissionsBitField(current?.deny.bitfield ?? 0n);
+      for (const [name, value] of Object.entries(options)) {
+        allow.remove(PermissionFlagsBits[name]);
+        deny.remove(PermissionFlagsBits[name]);
+        if (value === true) allow.add(PermissionFlagsBits[name]);
+        if (value === false) deny.add(PermissionFlagsBits[name]);
+      }
+      cache.set(id, { id, type: current?.type ?? type, allow, deny });
+      manager.edits.push({ id, options });
+    },
+  };
+  return manager;
+};
+
 const makeTextChannel = (guild, { name = 'channel', parent = null, permissionOverwrites = [] } = {}) => {
   const id = snowflake();
   const messages = new Map();
@@ -41,6 +64,12 @@ const makeTextChannel = (guild, { name = 'channel', parent = null, permissionOve
     sent: [],
     edits: 0,
     deleted: false,
+    bulkDeleted: [],
+    permissionOverwrites: makeOverwriteManager(),
+    bulkDelete: async (ids) => {
+      channel.bulkDeleted.push(...ids);
+      return new Collection(ids.map((messageId) => [messageId, {}]));
+    },
     isTextBased: () => true,
     permissionsFor: () => ({ has: () => true }),
     toString: () => `<#${id}>`,
@@ -75,7 +104,10 @@ const makeGuild = ({ roles = [] } = {}) => {
     id: snowflake(),
     name: 'Test Server',
     ownerId: snowflake(),
-    client: { user: { id: BOT_ID } },
+    client: {
+      user: { id: BOT_ID },
+      fetchInvite: async () => Promise.reject(apiError(10006)),
+    },
     banned,
     roles: { cache: new Map(roles.map((id) => [id, { id }])) },
     bans: {
@@ -89,6 +121,7 @@ const makeGuild = ({ roles = [] } = {}) => {
       },
     },
     members: {
+      me: { id: BOT_ID, roles: { cache: new Map() } },
       cache: members,
       ban: async (id) => banned.add(id),
       fetch: async (options) => members.get(options?.user ?? options) ?? Promise.reject(apiError(10007)),

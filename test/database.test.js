@@ -22,7 +22,7 @@ test('a fresh database is migrated to the latest version', () => {
   const db = database.open(fresh);
   assert.equal(db.pragma('user_version', { simple: true }), database.migrations.length);
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name);
-  for (const table of ['punishments', 'guild_settings', 'ticket_panels', 'ticket_counters', 'tickets', 'verifications', 'verification_panels', 'oauth_states']) assert.ok(tables.includes(table), table);
+  for (const table of ['punishments', 'guild_settings', 'ticket_panels', 'ticket_counters', 'tickets', 'verifications', 'verification_panels', 'oauth_states', 'automod_settings', 'automod_flags']) assert.ok(tables.includes(table), table);
   database.open(file);
 });
 
@@ -55,10 +55,31 @@ test('an existing version 2 database with tickets is upgraded to add verificatio
   db.close();
 
   database.open(legacy);
-  assert.equal(database.get().pragma('user_version', { simple: true }), 3);
+  assert.equal(database.get().pragma('user_version', { simple: true }), database.migrations.length);
   assert.equal(tickets.findActiveByCreator('g', 'u').number, 7);
   const tables = database.get().prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name);
   for (const table of ['verifications', 'verification_panels', 'oauth_states']) assert.ok(tables.includes(table), table);
+  database.open(file);
+});
+
+test('an existing version 3 database gains AutoMod tables and punishment sources', () => {
+  const legacy = tempDatabase();
+  const db = new Database(legacy);
+  database.migrations.slice(0, 3).forEach((sql) => db.exec(sql));
+  db.pragma('user_version = 3');
+  db.prepare("INSERT INTO punishments (type, guild_id, user_id, moderator_id, reason, created_at) VALUES ('warn', 'g', 'u', 'm', 'manual', 1)").run();
+  db.prepare("INSERT INTO verifications (discord_id, roblox_id, roblox_username, verified_at) VALUES ('u', '1', 'player', 1)").run();
+  db.close();
+
+  database.open(legacy);
+  assert.equal(database.get().pragma('user_version', { simple: true }), 4);
+  const [warn] = punishments.listByUser('g', 'u', 1);
+  assert.deepEqual([warn.reason, warn.source, warn.automod_function], ['manual', 'moderator', null]);
+  assert.equal(database.get().prepare('SELECT roblox_username FROM verifications').get().roblox_username, 'player');
+  const tables = database.get().prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name);
+  for (const table of ['automod_settings', 'automod_flags', 'automod_whitelist', 'automod_raid_state', 'automod_lockdowns', 'automod_lockdown_overwrites']) {
+    assert.ok(tables.includes(table), table);
+  }
   database.open(file);
 });
 

@@ -41,6 +41,14 @@ const Tickets = {
   MANAGER: Level.ADMINISTRATOR,
 };
 
+const Automod = {
+  ADMIN: Level.SENIOR_MODERATOR,
+  IMMUNE: Level.SUPPORT,
+  ALERTED: Level.SUPPORT,
+};
+
+const isAutomodImmune = (member) => getLevel(member) >= Automod.IMMUNE;
+
 const isTicketStaff = (member) => getLevel(member) >= Tickets.STAFF;
 
 const canCloseTicket = (member, ticket) => member.id === ticket.claimed_by || getLevel(member) >= Tickets.MANAGER;
@@ -51,10 +59,12 @@ module.exports = {
   ROLES,
   Level,
   Tickets,
+  Automod,
   getLevel,
   rolesAtLeast,
   assertCommand,
   assertCanModerate,
+  isAutomodImmune,
   isTicketStaff,
   canCloseTicket,
   canDeleteTicket,

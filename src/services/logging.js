@@ -3,17 +3,23 @@ const guildSettings = require('../database/guildSettings');
 const { ACTIONS, Colors, recordEmbed } = require('../utils/embeds');
 const { UserError } = require('../utils/errors');
 
-const sendEmbed = async (guild, embed) => {
+const isEnabled = (guild) => Boolean(guildSettings.get(guild.id)?.logs_enabled);
+
+const post = async (guild, payload) => {
   const settings = guildSettings.get(guild.id);
-  if (!settings?.logs_enabled) return;
+  if (!settings?.logs_enabled) return false;
 
   try {
     const channel = await guild.channels.fetch(settings.log_channel_id);
-    await channel.send({ embeds: [embed] });
+    await channel.send(payload);
+    return true;
   } catch (error) {
     console.error(`Failed to send log in guild ${guild.id}: ${error.message}`);
+    return false;
   }
 };
+
+const sendEmbed = (guild, embed) => post(guild, { embeds: [embed] });
 
 const send = (guild, record) => sendEmbed(guild, recordEmbed(record, `Moderation • ${ACTIONS[record.type].label}`));
 
@@ -35,4 +41,4 @@ const disable = (guild) => {
   guildSettings.disableLogs(guild.id);
 };
 
-module.exports = { send, sendEmbed, enable, disable };
+module.exports = { isEnabled, post, send, sendEmbed, enable, disable };

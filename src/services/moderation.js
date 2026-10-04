@@ -200,6 +200,38 @@ const expireBan = async (client, ban) => {
   return record(guild, { type: 'unban', userId: ban.user_id, moderatorId: client.user.id, reason });
 };
 
+const automodWarn = ({ guild, userId, functionId, reason, channelId }) =>
+  punishments.create({
+    type: 'warn',
+    guildId: guild.id,
+    userId,
+    moderatorId: guild.client.user.id,
+    reason,
+    channelId,
+    source: 'automod',
+    automodFunction: functionId,
+  });
+
+const automodMute = async ({ guild, member, duration, functionId, reason, channelId }) => {
+  const parsed = parseDuration(duration);
+  assertTimeout(parsed);
+  if ((member.communicationDisabledUntilTimestamp ?? 0) < parsed.expiresAt) {
+    await member.disableCommunicationUntil(parsed.expiresAt, `Roland AutoMod (${functionId}): ${reason}`.slice(0, 512));
+  }
+  return punishments.create({
+    type: 'mute',
+    guildId: guild.id,
+    userId: member.id,
+    moderatorId: guild.client.user.id,
+    reason,
+    duration: parsed.input,
+    expiresAt: parsed.expiresAt,
+    channelId,
+    source: 'automod',
+    automodFunction: functionId,
+  });
+};
+
 const history = (guildId, userId, page, size) => {
   const total = punishments.countByUser(guildId, userId);
   const pages = Math.max(1, Math.ceil(total / size));
@@ -207,4 +239,4 @@ const history = (guildId, userId, page, size) => {
   return { total, pages, page: current, records: punishments.listByUser(guildId, userId, size, current * size) };
 };
 
-module.exports = { MAX_CLEAR, ban, kick, mute, unmute, unban, warn, clear, expireBan, history };
+module.exports = { MAX_CLEAR, ban, kick, mute, unmute, unban, warn, clear, expireBan, automodWarn, automodMute, history };

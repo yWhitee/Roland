@@ -90,6 +90,61 @@ const migrations = [
   );
   CREATE INDEX oauth_states_discord ON oauth_states (discord_id);
   CREATE INDEX oauth_states_expiration ON oauth_states (expires_at);`,
+  `ALTER TABLE punishments ADD COLUMN source TEXT NOT NULL DEFAULT 'moderator';
+  ALTER TABLE punishments ADD COLUMN automod_function TEXT;
+  CREATE TABLE automod_settings (
+    guild_id TEXT NOT NULL,
+    function_id TEXT NOT NULL,
+    enabled INTEGER NOT NULL,
+    updated_by TEXT,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (guild_id, function_id)
+  );
+  CREATE TABLE automod_flags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    function_id TEXT NOT NULL,
+    channel_id TEXT,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+  );
+  CREATE INDEX automod_flags_active ON automod_flags (guild_id, user_id, function_id, expires_at);
+  CREATE INDEX automod_flags_expiration ON automod_flags (expires_at);
+  CREATE TABLE automod_whitelist (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id TEXT NOT NULL,
+    function_id TEXT NOT NULL,
+    target_type TEXT NOT NULL CHECK (target_type IN ('user', 'role')),
+    target_id TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    UNIQUE (guild_id, function_id, target_type, target_id)
+  );
+  CREATE TABLE automod_raid_state (
+    guild_id TEXT PRIMARY KEY NOT NULL,
+    active INTEGER NOT NULL DEFAULT 0,
+    started_at INTEGER,
+    expires_at INTEGER
+  );
+  CREATE TABLE automod_lockdowns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    UNIQUE (guild_id, channel_id)
+  );
+  CREATE TABLE automod_lockdown_overwrites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lockdown_id INTEGER NOT NULL REFERENCES automod_lockdowns (id),
+    target_id TEXT NOT NULL,
+    target_type INTEGER NOT NULL,
+    permission TEXT NOT NULL,
+    previous TEXT NOT NULL CHECK (previous IN ('allow', 'deny', 'inherit')),
+    applied TEXT NOT NULL CHECK (applied IN ('allow', 'deny')),
+    UNIQUE (lockdown_id, target_id, permission)
+  );`,
 ];
 
 let db;

@@ -1,4 +1,5 @@
 const { EmbedBuilder } = require('discord.js');
+const automodFunctions = require('../services/automod/functions');
 const { formatDuration } = require('./duration');
 
 const Colors = { error: 0xed4245, success: 0x57f287, info: 0x5865f2, warning: 0xfee75c };
@@ -18,7 +19,12 @@ const time = (ms) => `<t:${Math.floor(ms / 1000)}:f>`;
 const describe = (record, { user = true } = {}) => {
   const lines = [];
   if (user && record.user_id) lines.push(`**User:** <@${record.user_id}> (\`${record.user_id}\`)`);
-  lines.push(`**Moderator:** <@${record.moderator_id}>`);
+  if (record.source === 'automod') {
+    const name = automodFunctions.byId.get(record.automod_function)?.name ?? record.automod_function;
+    lines.push('**Source:** AutoMod', `**Function:** ${name}`, '**Moderator:** Roland AutoMod');
+  } else {
+    lines.push(`**Moderator:** <@${record.moderator_id}>`);
+  }
   lines.push(`**Date:** ${time(record.created_at)}`);
   if (record.duration) {
     lines.push(`**Duration:** ${formatDuration(record.duration)}`);
@@ -29,6 +35,8 @@ const describe = (record, { user = true } = {}) => {
   if (record.reason) lines.push(`**Reason:** ${record.reason}`);
   return lines.join('\n');
 };
+
+const recordLabel = (record) => `${ACTIONS[record.type].label}${record.source === 'automod' ? ' (AutoMod)' : ''}`;
 
 const recordEmbed = (record, title) =>
   new EmbedBuilder()
@@ -61,4 +69,4 @@ const errorEmbed = (message) => new EmbedBuilder().setColor(Colors.error).setDes
 
 const successEmbed = (message) => new EmbedBuilder().setColor(Colors.success).setDescription(`✅ ${message}`);
 
-module.exports = { ACTIONS, Colors, time, describe, recordEmbed, noticeEmbed, withDmStatus, errorEmbed, successEmbed };
+module.exports = { ACTIONS, Colors, time, describe, recordLabel, recordEmbed, noticeEmbed, withDmStatus, errorEmbed, successEmbed };
