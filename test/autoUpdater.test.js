@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { execFileSync, spawn } = require('node:child_process');
+const crypto = require('node:crypto');
 const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -81,14 +82,19 @@ const fakeBots = () => {
   };
 };
 
-const setup = (options = {}) => {
+const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex');
+
+const setup = ({ deployed = true, ...options } = {}) => {
   const repos = repositories();
   const fake = fakeBots();
   const logs = [];
   const commands = [];
   const exits = [];
-  const updater = createUpdater({
+  const deployedRecord = path.join(repos.root, 'deployed-commands.sha256');
+  if (deployed) fs.writeFileSync(deployedRecord, `${sha256('ping v1\n')}\n`);
+  const make = (overrides = {}) => createUpdater({
     repoDir: repos.deploy,
+    deployedRecord,
     interval: 60_000,
     restartDelays: [20],
     stopTimeout: 1000,
@@ -98,8 +104,9 @@ const setup = (options = {}) => {
     spawnBot: fake.spawnBot,
     exit: (code) => exits.push(code),
     ...options,
+    ...overrides,
   });
-  return { ...repos, ...fake, logs, commands, exits, updater };
+  return { ...repos, ...fake, logs, commands, exits, deployedRecord, make, updater: make() };
 };
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -162,6 +169,44 @@ test('deploys slash commands only when their definitions or registration change'
   push({ 'src/deploy-commands.js': 'deploy v2\n' });
   await updater.check();
   assert.deepEqual(commands, ['npm run deploy', 'npm run deploy']);
+});
+
+test('registers slash commands at startup when the current definitions were never deployed', async () => {
+  const { updater, make, bots, alive, commands, deployedRecord, logs } = setup({ deployed: false });
+  await updater.init();
+  assert.deepEqual(commands, ['npm run deploy']);
+  assert.equal(fs.readFileSync(deployedRecord, 'utf8').trim(), sha256('ping v1\n'));
+  assert.ok(logs.some((line) => line.includes('Slash commands have not been registered with the current definitions')));
+  assert.equal(bots.length, 1);
+
+  await updater.shutdown();
+  await make().init();
+  assert.deepEqual(commands, ['npm run deploy'], 'a restart does not deploy the same definitions again');
+  assert.equal(alive().length, 1);
+});
+
+test('a failed deploy is retried until it succeeds', async () => {
+  const commands = [];
+  let fail = true;
+  const { updater, deployedRecord, push } = setup({
+    deployed: false,
+    run: async (command, args) => {
+      commands.push([command, ...args].join(' '));
+      if (fail) throw new Error('offline');
+    },
+  });
+  await updater.init();
+  assert.equal(fs.existsSync(deployedRecord), false);
+
+  fail = false;
+  push({ 'README.md': 'v2\n' });
+  await updater.check();
+  assert.deepEqual(commands, ['npm run deploy', 'npm run deploy']);
+  assert.equal(fs.readFileSync(deployedRecord, 'utf8').trim(), sha256('ping v1\n'));
+
+  push({ 'README.md': 'v3\n' });
+  await updater.check();
+  assert.equal(commands.length, 2);
 });
 
 test('never overwrites local changes to tracked files', async () => {

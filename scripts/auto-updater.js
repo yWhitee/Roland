@@ -1,4 +1,5 @@
 const { execFile, spawn } = require('node:child_process');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -48,10 +49,11 @@ const createUpdater = ({
       child.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`${command} ${args.join(' ')} exited with code ${code}`))));
     }),
   commandPayload = () => exec(process.execPath, ['-e', PAYLOAD_SCRIPT], { cwd: repoDir }),
+  deployedRecord = path.join(repoDir, 'data', 'deployed-commands.sha256'),
   spawnBot = () => spawn(process.execPath, [path.join(repoDir, 'src', 'index.js')], { cwd: repoDir, stdio: 'inherit' }),
   exit = (code) => process.exit(code),
 } = {}) => {
-  const state = { branch, bot: null, payload: null, crashes: 0, current: null, stopping: false, shuttingDown: false, timer: null, restartTimer: null };
+  const state = { branch, bot: null, crashes: 0, current: null, stopping: false, shuttingDown: false, timer: null, restartTimer: null };
   const short = (sha) => sha.slice(0, 7);
   const trackingRef = () => `refs/remotes/${remote}/${state.branch}`;
 
@@ -60,6 +62,29 @@ const createUpdater = ({
       log(`Could not read the slash command definitions: ${error.message}`);
       return null;
     });
+
+  const fingerprint = (payload) => crypto.createHash('sha256').update(payload).digest('hex');
+
+  const isDeployed = (payload) => {
+    try {
+      return fs.readFileSync(deployedRecord, 'utf8').trim() === fingerprint(payload);
+    } catch {
+      return false;
+    }
+  };
+
+  const deploy = async (payload, reason) => {
+    log(`${reason} Running npm run deploy.`);
+    try {
+      await run('npm', ['run', 'deploy']);
+      if (payload !== null) {
+        fs.mkdirSync(path.dirname(deployedRecord), { recursive: true });
+        fs.writeFileSync(deployedRecord, `${fingerprint(payload)}\n`);
+      }
+    } catch (error) {
+      log(`npm run deploy failed: ${error.message}`);
+    }
+  };
 
   const startBot = () => {
     if (state.bot || state.shuttingDown) return state.bot;
@@ -115,7 +140,8 @@ const createUpdater = ({
       });
     }
     log(`Monitoring ${remote}/${state.branch} every ${interval / 1000}s in ${repoDir}.`);
-    state.payload = await readPayload();
+    const payload = await readPayload();
+    if (payload !== null && !isDeployed(payload)) await deploy(payload, 'Slash commands have not been registered with the current definitions.');
     startBot();
   };
 
@@ -137,16 +163,8 @@ const createUpdater = ({
     }
 
     const payload = await readPayload();
-    const payloadChanged = payload !== null && payload !== state.payload;
-    if (payloadChanged || changed.some((file) => REGISTRATION_FILES.includes(file))) {
-      log('Slash command definitions changed. Running npm run deploy.');
-      await run('npm', ['run', 'deploy'])
-        .then(() => {
-          state.payload = payload;
-        })
-        .catch((error) => log(`npm run deploy failed: ${error.message}`));
-    } else if (payload !== null) {
-      state.payload = payload;
+    if ((payload !== null && !isDeployed(payload)) || changed.some((file) => REGISTRATION_FILES.includes(file))) {
+      await deploy(payload, 'Slash command definitions changed.');
     }
 
     if (changed.includes(SELF)) {

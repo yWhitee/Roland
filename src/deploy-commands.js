@@ -5,7 +5,7 @@ const { token, clientId, guildId } = require('./config');
 const load = require('./loader');
 
 registerCommands(new REST().setToken(token), { clientId, guildId, commands: load(path.join(__dirname, 'commands')) })
-  .then(({ guild, global }) => console.log(`Registered ${guild} guild command(s) in guild ${guildId} and ${global} global command(s)`))
+  .then(({ guild, global }) => console.log(`Registered ${guild.length} guild command(s) in guild ${guildId} and ${global.length} global command(s): ${global.join(', ')}`))
   .catch((error) => {
     console.error(`Failed to register commands: ${error.message}`);
     process.exit(1);

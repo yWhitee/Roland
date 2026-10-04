@@ -73,8 +73,8 @@ test('existing commands are registered as guild commands and /play as a global c
 
   try {
     const rest = new REST({ api: `http://127.0.0.1:${server.address().port}` }).setToken('test');
-    const counts = await registerCommands(rest, { clientId: '100000000000000001', guildId: '100000000000000002', commands });
-    assert.deepEqual(counts, { guild: EXPECTED.length, global: 1 });
+    const registered = await registerCommands(rest, { clientId: '100000000000000001', guildId: '100000000000000002', commands });
+    assert.deepEqual({ guild: registered.guild.sort(), global: registered.global }, { guild: EXPECTED, global: ['play'] });
   } finally {
     server.close();
   }
@@ -86,7 +86,7 @@ test('existing commands are registered as guild commands and /play as a global c
   assert.deepEqual(guild.body.map((command) => command.name).sort(), EXPECTED, 'existing commands stay guild commands');
   assert.ok(!guild.body.some((command) => command.name === 'play'), 'no duplicate /play guild command');
   assert.deepEqual(global.body.map((command) => command.name), ['play'], 'only /play is global');
-  assert.deepEqual(global.body[0].contexts, [0, 1]);
+  assert.deepEqual(global.body[0], { options: [], name: 'play', description: 'Play Slime Odyssey: Anime Realms on Roblox', contexts: [0, 1], type: 1 });
   assert.equal(global.body[0].default_member_permissions, undefined, 'no permission restriction');
 });
 

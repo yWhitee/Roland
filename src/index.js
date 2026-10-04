@@ -16,7 +16,7 @@ const start = async () => {
 
   const { intents, capabilities } = await resolveIntents(config.token);
   automod.configure(capabilities);
-  const client = new Client({ intents, presence: presence.configure({ applicationId: config.clientId }) });
+  const client = new Client({ intents, presence: presence.options() });
 
   client.commands = new Collection(load(path.join(__dirname, 'commands')).map((command) => [command.data.name, command]));
   client.components = new Collection(load(path.join(__dirname, 'components')).map((component) => [component.prefix, component]));

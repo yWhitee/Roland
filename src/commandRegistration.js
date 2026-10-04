@@ -9,7 +9,7 @@ const registerCommands = async (rest, { clientId, guildId, commands }) => {
   const { guild, global } = split(commands);
   const guildCommands = await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body: guild });
   const globalCommands = await rest.put(Routes.applicationCommands(clientId), { body: global });
-  return { guild: guildCommands.length, global: globalCommands.length };
+  return { guild: guildCommands.map((command) => command.name), global: globalCommands.map((command) => command.name) };
 };
 
 module.exports = { split, registerCommands };
