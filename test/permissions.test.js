@@ -7,6 +7,7 @@ const { UserError } = require('../src/utils/errors');
 const { BOT_ID, makeMember } = require('./helpers/discord');
 
 const { ROLES, Level, getLevel, assertCommand, assertCanModerate } = permissions;
+const MEMBER_ROLE = '1555596685462479048';
 
 const RANKS = {
   member: null,
@@ -55,6 +56,7 @@ test('command permission matrix', () => {
     automod: ['senior', 'admin', 'owner'],
     automodwhitelist: ['senior', 'admin', 'owner'],
     automodlist: ['senior', 'admin', 'owner'],
+    verify: ['member', 'support', 'moderator', 'senior', 'admin', 'owner'],
   };
 
   assert.deepEqual(Object.keys(commands).sort(), Object.keys(allowed).sort());
@@ -64,7 +66,22 @@ test('command permission matrix', () => {
       if (ranks.includes(rank)) assert.doesNotThrow(run, `${rank} should be able to use /${name}`);
       else assert.throws(run, UserError, `${rank} should not be able to use /${name}`);
     }
+    const verified = () => assertCommand(makeMember(MEMBER_ROLE), commands[name].level);
+    if (ranks.includes('member')) assert.doesNotThrow(verified, `Member role should be able to use /${name}`);
+    else assert.throws(verified, UserError, `Member role should not be able to use /${name}`);
   }
+});
+
+test('role IDs match the server hierarchy and Member is not a staff level', () => {
+  assert.deepEqual(ROLES, {
+    CREATOR: '1555595294236872744',
+    ADMINISTRATOR: '1555597468773777459',
+    SENIOR_MODERATOR: '1555597533655474217',
+    MODERATOR: '1555596754278162452',
+    SUPPORT: '1556115487757307996',
+  });
+  assert.equal(require('../src/services/verification').MEMBER_ROLE, MEMBER_ROLE);
+  assert.equal(getLevel(makeMember(MEMBER_ROLE)), Level.NONE);
 });
 
 test('the Creator can never be targeted', () => {

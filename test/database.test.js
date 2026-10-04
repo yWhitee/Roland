@@ -72,7 +72,7 @@ test('an existing version 3 database gains AutoMod tables and punishment sources
   db.close();
 
   database.open(legacy);
-  assert.equal(database.get().pragma('user_version', { simple: true }), 4);
+  assert.equal(database.get().pragma('user_version', { simple: true }), database.migrations.length);
   const [warn] = punishments.listByUser('g', 'u', 1);
   assert.deepEqual([warn.reason, warn.source, warn.automod_function], ['manual', 'moderator', null]);
   assert.equal(database.get().prepare('SELECT roblox_username FROM verifications').get().roblox_username, 'player');
@@ -80,6 +80,20 @@ test('an existing version 3 database gains AutoMod tables and punishment sources
   for (const table of ['automod_settings', 'automod_flags', 'automod_whitelist', 'automod_raid_state', 'automod_lockdowns', 'automod_lockdown_overwrites']) {
     assert.ok(tables.includes(table), table);
   }
+  database.open(file);
+});
+
+test('an existing version 4 database keeps pending OAuth states and gains the state mode', () => {
+  const legacy = tempDatabase();
+  const db = new Database(legacy);
+  database.migrations.slice(0, 4).forEach((sql) => db.exec(sql));
+  db.pragma('user_version = 4');
+  db.prepare("INSERT INTO oauth_states (state_hash, discord_id, guild_id, created_at, expires_at) VALUES ('hash', 'u', 'g', 1, 2)").run();
+  db.close();
+
+  database.open(legacy);
+  assert.equal(database.get().pragma('user_version', { simple: true }), 5);
+  assert.equal(database.get().prepare("SELECT mode FROM oauth_states WHERE state_hash = 'hash'").get().mode, 'link');
   database.open(file);
 });
 

@@ -17,6 +17,7 @@ const REQUIRED = ['clientId', 'clientSecret', 'redirectUri'];
 
 let settings = null;
 const pending = new Map();
+const queues = new Map();
 
 const isUrl = (value) => {
   try {
@@ -58,6 +59,16 @@ const remember = (stateHash, interaction) => {
   setTimeout(() => pending.delete(stateHash), INTERACTION_TTL).unref();
 };
 
+const serialize = (key, task) => {
+  const run = (queues.get(key) ?? Promise.resolve()).then(task);
+  const tail = run.catch(() => {});
+  queues.set(key, tail);
+  tail.then(() => {
+    if (queues.get(key) === tail) queues.delete(key);
+  });
+  return run;
+};
+
 const take = (stateHash) => {
   const interaction = pending.get(stateHash);
   pending.delete(stateHash);
@@ -69,9 +80,9 @@ const publishPanel = async (channel, payload, { type, createdBy }) => {
   return verificationPanels.create({ guildId: channel.guild.id, channelId: channel.id, messageId: message.id, type, createdBy });
 };
 
-const start = async (interaction, now = Date.now()) => {
+const start = async (interaction, { replace = false, now = Date.now() } = {}) => {
   const existing = verifications.findByDiscord(interaction.user.id);
-  if (existing) return interaction.reply({ embeds: [alreadyVerifiedEmbed(existing)], flags: MessageFlags.Ephemeral });
+  if (existing && !replace) return interaction.reply({ embeds: [alreadyVerifiedEmbed(existing)], flags: MessageFlags.Ephemeral });
   if (!settings) throw new UserError('Roblox verification is not configured yet. Please contact a server administrator.');
 
   const state = crypto.randomBytes(32).toString('base64url');
@@ -81,10 +92,11 @@ const start = async (interaction, now = Date.now()) => {
   const stateHash = hashState(state);
   const expiresAt = now + STATE_TTL;
   const panel = interaction.message ? verificationPanels.findByMessage(interaction.message.id) : null;
-  oauthStates.create({ stateHash, discordId: interaction.user.id, guildId: interaction.guildId, panelId: panel?.id ?? null, createdAt: now, expiresAt });
+  const mode = replace ? 'relink' : 'link';
+  oauthStates.create({ stateHash, discordId: interaction.user.id, guildId: interaction.guildId, panelId: panel?.id ?? null, mode, createdAt: now, expiresAt });
   remember(stateHash, interaction);
 
-  return interaction.reply({ ...startMessage(url, expiresAt), flags: MessageFlags.Ephemeral });
+  return interaction.reply({ ...startMessage(url, expiresAt, existing), flags: MessageFlags.Ephemeral });
 };
 
 const buildNickname = (displayName, robloxUsername) => {
@@ -177,25 +189,32 @@ const authenticate = async (record, params, state) => {
   const user = await roblox.fetchUser(settings, tokens.access_token);
   await roblox.revoke(settings, tokens.refresh_token);
 
-  const { status, verification } = verifications.link({
+  const { status, verification, previous } = verifications.link({
     discordId: record.discord_id,
     robloxId: user.id,
     robloxUsername: user.username,
     robloxDisplayName: user.displayName,
     guildId: record.guild_id,
+    replace: record.mode === 'relink',
   });
 
-  if (status === 'roblox-linked') return page(409, 'Verification failed', ['This Roblox account is already linked to another Discord account.']);
+  if (status === 'roblox-linked') {
+    const lines = ['This Roblox account is already linked to another Discord account.'];
+    if (verification) lines.push(`Your current verification (${verification.roblox_username}) was not changed.`);
+    return page(409, 'Verification failed', lines);
+  }
   if (status === 'discord-linked') {
     return page(409, 'Verification failed', [`Your Discord account is already verified with another Roblox account (${verification.roblox_username}).`]);
   }
 
   const updates = await applyMemberUpdates(record.guild_id, record.discord_id, verification.roblox_username);
-  if (status === 'linked' && updates.guild) await logging.sendEmbed(updates.guild, logEmbed(verification, updates));
+  if (status !== 'already-verified' && updates.guild) await logging.sendEmbed(updates.guild, logEmbed(verification, updates, previous));
 
-  return page(200, status === 'linked' ? 'Verification successful' : 'You are already verified', [
+  const titles = { linked: 'Verification successful', relinked: 'Roblox account updated', 'already-verified': 'You are already verified' };
+  return page(200, titles[status], [
     `Roblox username: ${verification.roblox_username}`,
     `Roblox ID: ${verification.roblox_id}`,
+    ...(previous ? [`Previous Roblox account: ${previous.roblox_username}`] : []),
     '',
     ...describeUpdates(updates),
   ], true);
@@ -203,7 +222,7 @@ const authenticate = async (record, params, state) => {
 
 const settle = async (record, params, state) => {
   try {
-    return await authenticate(record, params, state);
+    return await serialize(record.discord_id, () => authenticate(record, params, state));
   } catch (error) {
     console.error(`Roblox verification failed for ${record.discord_id}: ${error.message}`);
     return ROBLOX_FAILURES[error.kind] ?? page(500, 'Verification failed', ['An unexpected error occurred during verification. Please try again later.']);

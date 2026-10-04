@@ -19,13 +19,16 @@ const panelComponents = () => [
   ),
 ];
 
-const startMessage = (url, expiresAt) => ({
+const startMessage = (url, expiresAt, current = null) => ({
   embeds: [
     new EmbedBuilder()
       .setColor(Colors.info)
       .setTitle('Verify with Roblox')
       .setDescription(
         [
+          ...(current
+            ? [`You are currently verified as **${current.roblox_username}**. Completing this verification will replace your linked Roblox account.`, '']
+            : []),
           'Click the button below to sign in with Roblox and authorize Roland.',
           'You will never be asked for your Roblox password by Roland.',
           '',
@@ -48,19 +51,26 @@ const resultEmbed = ({ title, lines, success }) =>
     .setTitle(title)
     .setDescription(lines.join('\n'));
 
-const logEmbed = (verification, updates) =>
-  new EmbedBuilder()
+const logEmbed = (verification, updates, previous = null) => {
+  const embed = new EmbedBuilder()
     .setColor(Colors.success)
-    .setTitle('Verification • Roblox account linked')
+    .setTitle(previous ? 'Verification • Roblox account changed' : 'Verification • Roblox account linked')
     .addFields(
       { name: 'Discord user', value: `<@${verification.discord_id}> (\`${verification.discord_id}\`)` },
       { name: 'Roblox username', value: `[${verification.roblox_username}](${profileUrl(verification.roblox_id)})`, inline: true },
       { name: 'Roblox ID', value: `\`${verification.roblox_id}\``, inline: true },
+    );
+  if (previous) {
+    embed.addFields({ name: 'Previous Roblox account', value: `[${previous.roblox_username}](${profileUrl(previous.roblox_id)}) (\`${previous.roblox_id}\`)` });
+  }
+  return embed
+    .addFields(
       { name: 'Member role', value: updates.role?.ok ? 'Assigned' : 'Not assigned', inline: true },
       { name: 'Nickname', value: updates.nickname?.ok ? 'Updated' : 'Not updated', inline: true },
       { name: 'Timestamp', value: fullTime(verification.verified_at) },
     )
     .setTimestamp(verification.verified_at);
+};
 
 const infoEmbed = (user, verification) => {
   const embed = new EmbedBuilder().setColor(Colors.info).setTitle('Verification info');

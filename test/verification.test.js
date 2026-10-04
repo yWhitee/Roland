@@ -12,6 +12,10 @@ const createverify = require('../src/commands/createverify');
 const verifyinfo = require('../src/commands/verifyinfo');
 const verifyButton = require('../src/components/verify');
 const web = require('../src/web/server');
+const { Collection } = require('discord.js');
+const verifyCommand = require('../src/commands/verify');
+const interactionCreate = require('../src/events/interactionCreate');
+const oauthStates = require('../src/database/oauthStates');
 const { ROLES } = require('../src/permissions');
 const { makeGuild, makeInteraction, makeMember, snowflake, tempDatabase } = require('./helpers/discord');
 
@@ -516,4 +520,174 @@ test('the OAuth callback server serves the configured path end to end', async ()
   } finally {
     server.close();
   }
+});
+
+const useRoblox = (guild, user) => {
+  const client = { user: { id: '900000000000000000' }, guilds: { cache: new Map([[guild.id, guild]]) } };
+  verification.configure({ ...SETTINGS, client, fetch: fakeRoblox({ user }).fetch });
+};
+
+const linkOf = (reply) => {
+  const url = reply?.components?.[0]?.toJSON().components[0].url;
+  return url ? new URL(url) : undefined;
+};
+
+const runVerify = async (guild, member) => {
+  const interaction = makeInteraction({ guild, member });
+  await interactionCreate.execute({
+    ...interaction,
+    commandName: 'verify',
+    client: { commands: new Collection([['verify', verifyCommand]]), components: new Collection() },
+    isChatInputCommand: () => true,
+    isMessageComponent: () => false,
+    isModalSubmit: () => false,
+    inCachedGuild: () => true,
+  });
+  const reply = interaction.calls.replies[0];
+  const url = linkOf(reply);
+  return { interaction, reply, url, state: url?.searchParams.get('state') };
+};
+
+test('/verify can be used by every member, staff or not', async () => {
+  const { guild } = setup();
+  const ranks = {
+    'no role': null,
+    Member: MEMBER_ROLE,
+    Support: ROLES.SUPPORT,
+    Moderator: ROLES.MODERATOR,
+    'Senior Moderator': ROLES.SENIOR_MODERATOR,
+    Administrator: ROLES.ADMINISTRATOR,
+    Owner: ROLES.CREATOR,
+  };
+  for (const [rank, role] of Object.entries(ranks)) {
+    const member = makeMember(role, { globalName: 'Whitee' });
+    guild.members.cache.set(member.id, member);
+    const { reply, url } = await runVerify(guild, member);
+    assert.ok(reply.flags, `${rank}: private reply`);
+    assert.equal(`${url?.origin}${url?.pathname}`, 'https://apis.roblox.com/oauth/v1/authorize', `${rank} starts the official Roblox OAuth flow`);
+  }
+});
+
+test('/verify starts a normal verification for an unverified Discord account', async () => {
+  const { guild } = setup({ roblox: fakeRoblox({ user: { sub: '6000', preferred_username: 'first_account', nickname: 'Shown Name' } }) });
+  const member = join(guild);
+  const { reply, state } = await runVerify(guild, member);
+  assert.doesNotMatch(reply.embeds[0].toJSON().description, /currently verified/);
+  assert.equal(database.get().prepare('SELECT mode FROM oauth_states WHERE discord_id = ?').get(member.id).mode, 'relink');
+
+  const result = await callback({ code: 'x', state });
+  assert.equal(result.title, 'Verification successful');
+  assert.equal(verifications.findByDiscord(member.id).roblox_id, '6000');
+  assert.ok(member.roles.cache.has(MEMBER_ROLE));
+  assert.equal(member.nickname, 'Whitee (@first_account)');
+});
+
+test('/verify replaces the linked Roblox account after a successful OAuth flow', async () => {
+  const { guild } = setup({ roblox: fakeRoblox({ user: { sub: '6001', preferred_username: 'old_account' } }) });
+  const member = join(guild);
+  await callback({ code: 'x', state: (await click(guild, member)).state });
+  assert.equal(verifications.findByDiscord(member.id).roblox_username, 'old_account');
+
+  const panel = await click(guild, member);
+  assert.equal(panel.url, undefined, 'the verification panel still refuses verified users');
+
+  useRoblox(guild, { sub: '6002', preferred_username: 'new_account', name: 'Fancy Display', nickname: 'Fancy Display' });
+  const { reply, state } = await runVerify(guild, member);
+  assert.match(reply.embeds[0].toJSON().description, /currently verified as \*\*old_account\*\*/);
+  assert.equal(verifications.findByDiscord(member.id).roblox_id, '6001', 'nothing changes until the OAuth flow succeeds');
+
+  const result = await callback({ code: 'x', state });
+  assert.equal(result.status, 200);
+  assert.equal(result.title, 'Roblox account updated');
+  assert.deepEqual(result.lines.slice(0, 3), ['Roblox username: new_account', 'Roblox ID: 6002', 'Previous Roblox account: old_account']);
+
+  const stored = verifications.findByDiscord(member.id);
+  assert.deepEqual([stored.roblox_id, stored.roblox_username, stored.roblox_display_name], ['6002', 'new_account', 'Fancy Display']);
+  assert.equal(verifications.findByRoblox('6001'), undefined, 'the previous Roblox account is released');
+  assert.equal(database.get().prepare('SELECT COUNT(*) AS total FROM verifications WHERE discord_id = ?').get(member.id).total, 1);
+  assert.ok(member.roles.cache.has(MEMBER_ROLE));
+  assert.equal(member.nickname, 'Whitee (@new_account)', 'the nickname uses the Roblox username, not the display name');
+
+  const log = guild.logChannel.sent.at(-1).embeds[0].toJSON();
+  assert.equal(log.title, 'Verification • Roblox account changed');
+  const fields = Object.fromEntries(log.fields.map((field) => [field.name, field.value]));
+  assert.match(fields['Roblox username'], /new_account/);
+  assert.match(fields['Previous Roblox account'], /old_account/);
+
+  const other = join(guild);
+  useRoblox(guild, { sub: '6001', preferred_username: 'old_account' });
+  assert.equal((await callback({ code: 'x', state: (await runVerify(guild, other)).state })).title, 'Verification successful', 'the released account can be linked again');
+});
+
+test('/verify rejects a Roblox account linked to another Discord and keeps the current link', async () => {
+  const { guild } = setup({ roblox: fakeRoblox({ user: { sub: '6101', preferred_username: 'taken_account' } }) });
+  const owner = join(guild);
+  await callback({ code: 'x', state: (await click(guild, owner)).state });
+
+  useRoblox(guild, { sub: '6102', preferred_username: 'my_account' });
+  const member = join(guild);
+  await callback({ code: 'x', state: (await click(guild, member)).state });
+  const before = verifications.findByDiscord(member.id);
+  const nickname = member.nickname;
+  const logged = guild.logChannel.sent.length;
+
+  useRoblox(guild, { sub: '6101', preferred_username: 'taken_account' });
+  const result = await callback({ code: 'x', state: (await runVerify(guild, member)).state });
+  assert.equal(result.status, 409);
+  assert.deepEqual(result.lines, ['This Roblox account is already linked to another Discord account.', 'Your current verification (my_account) was not changed.']);
+  assert.ok(!result.lines.join(' ').includes(owner.id), 'the other Discord account is not revealed');
+
+  assert.deepEqual(verifications.findByDiscord(member.id), before);
+  assert.equal(verifications.findByRoblox('6101').discord_id, owner.id);
+  assert.equal(member.nickname, nickname);
+  assert.equal(guild.logChannel.sent.length, logged, 'nothing is logged for a rejected change');
+});
+
+test('/verify states stay single-use and expire', async () => {
+  const { guild } = setup({ roblox: fakeRoblox({ user: { sub: '6201', preferred_username: 'kept_account' } }) });
+  const member = join(guild);
+  await callback({ code: 'x', state: (await click(guild, member)).state });
+
+  useRoblox(guild, { sub: '6202', preferred_username: 'late_account' });
+  const expired = await runVerify(guild, member);
+  assert.equal((await callback({ code: 'x', state: expired.state }, Date.now() + 11 * 60_000)).status, 400);
+  assert.equal(verifications.findByDiscord(member.id).roblox_id, '6201', 'an expired /verify link changes nothing');
+
+  const used = await runVerify(guild, member);
+  assert.equal((await callback({ code: 'x', state: used.state })).status, 200);
+  assert.equal((await callback({ code: 'x', state: used.state })).status, 400, 'the state cannot be replayed');
+  assert.equal(verifications.findByDiscord(member.id).roblox_id, '6202');
+});
+
+test('concurrent /verify flows for the same Discord account stay consistent', async () => {
+  const accounts = { slow: { sub: '6301', preferred_username: 'slow_account' }, fast: { sub: '6302', preferred_username: 'fast_account' } };
+  const fetch = async (url, options = {}) => {
+    const body = options.body ? Object.fromEntries(new URLSearchParams(options.body)) : {};
+    if (url.endsWith('/v1/token')) {
+      if (body.code === 'slow') await new Promise((resolve) => setTimeout(resolve, 50));
+      return json(200, { access_token: body.code, refresh_token: 'refresh' });
+    }
+    if (url.endsWith('/v1/userinfo')) return json(200, accounts[options.headers.authorization.slice('Bearer '.length)]);
+    return json(200, {});
+  };
+  const { guild } = setup({ roblox: { fetch } });
+  const member = join(guild);
+
+  const replaced = await runVerify(guild, member);
+  const latest = await runVerify(guild, member);
+  assert.equal((await callback({ code: 'fast', state: replaced.state })).status, 400, 'a new /verify invalidates the previous link');
+  assert.equal(database.get().prepare('SELECT COUNT(*) AS total FROM oauth_states WHERE discord_id = ?').get(member.id).total, 1);
+
+  const slow = callback({ code: 'slow', state: latest.state });
+  const next = await runVerify(guild, member);
+  const fast = await callback({ code: 'fast', state: next.state });
+  const first = await slow;
+
+  assert.equal(first.status, 200);
+  assert.equal(fast.title, 'Roblox account updated');
+  assert.match(fast.lines.join(' '), /Previous Roblox account: slow_account/, 'the later flow runs after the earlier one finishes');
+  assert.equal(verifications.findByDiscord(member.id).roblox_username, 'fast_account');
+  assert.equal(member.nickname, 'Whitee (@fast_account)', 'nickname and stored link agree');
+  assert.equal(verifications.findByRoblox('6301'), undefined);
+  assert.equal(oauthStates.consume('missing'), undefined);
 });

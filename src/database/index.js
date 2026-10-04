@@ -145,6 +145,7 @@ const migrations = [
     applied TEXT NOT NULL CHECK (applied IN ('allow', 'deny')),
     UNIQUE (lockdown_id, target_id, permission)
   );`,
+  `ALTER TABLE oauth_states ADD COLUMN mode TEXT NOT NULL DEFAULT 'link';`,
 ];
 
 let db;
