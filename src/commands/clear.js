@@ -10,11 +10,11 @@ module.exports = {
   level: Level.MODERATOR,
   data: new SlashCommandBuilder()
     .setName('clear')
-    .setDescription('Apaga mensagens recentes deste canal')
+    .setDescription('Delete recent messages in this channel')
     .addIntegerOption((option) =>
       option
-        .setName('quantidade')
-        .setDescription(`Quantidade de mensagens (1-${moderation.MAX_CLEAR})`)
+        .setName('amount')
+        .setDescription(`Number of messages (1-${moderation.MAX_CLEAR})`)
         .setRequired(true)
         .setMinValue(1)
         .setMaxValue(moderation.MAX_CLEAR),
@@ -22,13 +22,13 @@ module.exports = {
     .addStringOption(options.user(false)),
   async execute(interaction) {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    const input = interaction.options.getString('usuario');
+    const input = interaction.options.getString('user');
     const record = await moderation.clear({
       ...context(interaction),
       channel: interaction.channel ?? (await interaction.client.channels.fetch(interaction.channelId)),
-      amount: interaction.options.getInteger('quantidade', true),
+      amount: interaction.options.getInteger('amount', true),
       target: input ? await resolveTarget(interaction.guild, input) : null,
     });
-    await interaction.editReply({ embeds: [recordEmbed(record, 'Mensagens apagadas')] });
+    await interaction.editReply({ embeds: [recordEmbed(record, 'Messages cleared')] });
   },
 };

@@ -5,7 +5,7 @@ require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true
 const missing = ['DISCORD_TOKEN', 'DISCORD_CLIENT_ID', 'DISCORD_GUILD_ID'].filter((key) => !process.env[key]);
 
 if (missing.length) {
-  console.error(`Variáveis ausentes no .env: ${missing.join(', ')}`);
+  console.error(`Missing environment variables in .env: ${missing.join(', ')}`);
   process.exit(1);
 }
 

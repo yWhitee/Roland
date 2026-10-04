@@ -4,7 +4,7 @@ const embedBuilder = require('../services/embedBuilder');
 
 module.exports = {
   level: Level.SENIOR_MODERATOR,
-  data: new SlashCommandBuilder().setName('embed').setDescription('Abre o construtor interativo de embeds'),
-  execute: embedBuilder.start,
+  data: new SlashCommandBuilder().setName('embed').setDescription('Open the interactive embed builder'),
+  execute: (interaction) => embedBuilder.start(interaction, { prefix: 'embed' }),
   handleComponent: embedBuilder.handle,
 };

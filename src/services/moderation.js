@@ -3,7 +3,7 @@ const punishments = require('../database/punishments');
 const permissions = require('../permissions');
 const logging = require('./logging');
 const { parseDuration, assertTimeout } = require('../utils/duration');
-const { warnDmEmbed } = require('../utils/embeds');
+const { noticeEmbed } = require('../utils/embeds');
 const { UserError } = require('../utils/errors');
 
 const MAX_CLEAR = 5000;
@@ -13,15 +13,29 @@ const CLEAR_TIME_LIMIT = 14 * 60_000;
 
 const requireReason = (reason) => {
   const value = reason?.trim();
-  if (!value) throw new UserError('Informe um motivo.');
+  if (!value) throw new UserError('Please provide a reason.');
   return value;
 };
 
 const requireMember = (target) => {
-  if (!target.member) throw new UserError('Este usuário não está no servidor.');
+  if (!target.member) throw new UserError('This user is not a member of the server.');
 };
 
 const auditReason = (moderator, reason) => `${moderator.user.tag}: ${reason}`.slice(0, 512);
+
+const notify = (guild, moderator, user, notice) =>
+  user.send({ embeds: [noticeEmbed(guild, moderator, { createdAt: Date.now(), ...notice })] }).catch(() => null);
+
+const withNotice = async (guild, moderator, user, notice, action) => {
+  const message = await notify(guild, moderator, user, notice);
+  try {
+    await action();
+  } catch (error) {
+    await message?.delete().catch(() => {});
+    throw error;
+  }
+  return Boolean(message);
+};
 
 const isBanned = (guild, userId) =>
   guild.bans.fetch({ user: userId, force: true }).then(
@@ -42,10 +56,14 @@ const ban = async ({ guild, moderator, target, duration, reason, channelId }) =>
   reason = requireReason(reason);
   permissions.assertCanModerate(moderator, target);
   const parsed = parseDuration(duration);
-  if (await isBanned(guild, target.user.id)) throw new UserError('Este usuário já está banido.');
+  if (await isBanned(guild, target.user.id)) throw new UserError('This user is already banned.');
 
-  await guild.members.ban(target.user.id, { reason: auditReason(moderator, reason) });
-  return record(guild, {
+  const notice = { type: 'ban', reason, duration: parsed.input, expiresAt: parsed.expiresAt };
+  const dmSent = await withNotice(guild, moderator, target.user, notice, () =>
+    guild.members.ban(target.user.id, { reason: auditReason(moderator, reason) }),
+  );
+
+  const entry = await record(guild, {
     type: 'ban',
     userId: target.user.id,
     moderatorId: moderator.id,
@@ -55,6 +73,7 @@ const ban = async ({ guild, moderator, target, duration, reason, channelId }) =>
     active: true,
     channelId,
   });
+  return { record: entry, dmSent };
 };
 
 const kick = async ({ guild, moderator, target, reason, channelId }) => {
@@ -62,8 +81,12 @@ const kick = async ({ guild, moderator, target, reason, channelId }) => {
   requireMember(target);
   permissions.assertCanModerate(moderator, target);
 
-  await target.member.kick(auditReason(moderator, reason));
-  return record(guild, { type: 'kick', userId: target.user.id, moderatorId: moderator.id, reason, channelId });
+  const dmSent = await withNotice(guild, moderator, target.user, { type: 'kick', reason }, () =>
+    target.member.kick(auditReason(moderator, reason)),
+  );
+
+  const entry = await record(guild, { type: 'kick', userId: target.user.id, moderatorId: moderator.id, reason, channelId });
+  return { record: entry, dmSent };
 };
 
 const mute = async ({ guild, moderator, target, duration, reason, channelId }) => {
@@ -72,10 +95,10 @@ const mute = async ({ guild, moderator, target, duration, reason, channelId }) =
   permissions.assertCanModerate(moderator, target);
   const parsed = parseDuration(duration);
   assertTimeout(parsed);
-  if (target.member.isCommunicationDisabled()) throw new UserError('Este usuário já está mutado.');
+  if (target.member.isCommunicationDisabled()) throw new UserError('This user is already muted.');
 
   await target.member.disableCommunicationUntil(parsed.expiresAt, auditReason(moderator, reason));
-  return record(guild, {
+  const entry = await record(guild, {
     type: 'mute',
     userId: target.user.id,
     moderatorId: moderator.id,
@@ -84,13 +107,17 @@ const mute = async ({ guild, moderator, target, duration, reason, channelId }) =
     expiresAt: parsed.expiresAt,
     channelId,
   });
+
+  const notice = { type: 'mute', reason, duration: parsed.input, expiresAt: parsed.expiresAt, createdAt: entry.created_at };
+  const dmSent = Boolean(await notify(guild, moderator, target.user, notice));
+  return { record: entry, dmSent };
 };
 
 const unmute = async ({ guild, moderator, target, reason, channelId }) => {
   reason = requireReason(reason);
   requireMember(target);
   permissions.assertCanModerate(moderator, target);
-  if (!target.member.isCommunicationDisabled()) throw new UserError('Este usuário não está mutado.');
+  if (!target.member.isCommunicationDisabled()) throw new UserError('This user is not muted.');
 
   await target.member.timeout(null, auditReason(moderator, reason));
   return record(guild, { type: 'unmute', userId: target.user.id, moderatorId: moderator.id, reason, channelId });
@@ -98,7 +125,7 @@ const unmute = async ({ guild, moderator, target, reason, channelId }) => {
 
 const unban = async ({ guild, moderator, target, reason, channelId }) => {
   reason = requireReason(reason);
-  if (!(await isBanned(guild, target.user.id))) throw new UserError('Este usuário não está banido.');
+  if (!(await isBanned(guild, target.user.id))) throw new UserError('This user is not banned.');
 
   await guild.bans.remove(target.user.id, auditReason(moderator, reason));
   punishments.deactivateBans(guild.id, target.user.id);
@@ -111,7 +138,7 @@ const warn = async ({ guild, moderator, target, reason, channelId }) => {
   permissions.assertCanModerate(moderator, target);
 
   const entry = await record(guild, { type: 'warn', userId: target.user.id, moderatorId: moderator.id, reason, channelId });
-  const dmSent = await target.user.send({ embeds: [warnDmEmbed(guild, moderator, entry)] }).then(() => true, () => false);
+  const dmSent = Boolean(await notify(guild, moderator, target.user, { type: 'warn', reason, createdAt: entry.created_at }));
   return { record: entry, dmSent };
 };
 
@@ -142,8 +169,8 @@ const deleteMessages = async (channel, amount, userId) => {
 };
 
 const clear = async ({ guild, moderator, channel, amount, target }) => {
-  if (!channel?.messages || !channel.bulkDelete) throw new UserError('Este canal não suporta a limpeza de mensagens.');
-  if (!Number.isInteger(amount) || amount < 1 || amount > MAX_CLEAR) throw new UserError(`A quantidade deve estar entre 1 e ${MAX_CLEAR}.`);
+  if (!channel?.messages || !channel.bulkDelete) throw new UserError('Messages cannot be cleared in this channel.');
+  if (!Number.isInteger(amount) || amount < 1 || amount > MAX_CLEAR) throw new UserError(`The amount must be between 1 and ${MAX_CLEAR}.`);
   if (target) permissions.assertCanModerate(moderator, target);
 
   const deleted = await deleteMessages(channel, amount, target?.user.id);
@@ -160,7 +187,7 @@ const expireBan = async (client, ban) => {
   const guild = client.guilds.cache.get(ban.guild_id);
   if (!guild) return null;
 
-  const reason = `Ban temporário expirado (registro #${ban.id})`;
+  const reason = `Temporary ban expired (record #${ban.id})`;
   try {
     await guild.bans.remove(ban.user_id, reason);
   } catch (error) {

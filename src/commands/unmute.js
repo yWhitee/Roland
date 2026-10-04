@@ -10,16 +10,16 @@ module.exports = {
   level: Level.SENIOR_MODERATOR,
   data: new SlashCommandBuilder()
     .setName('unmute')
-    .setDescription('Remove o timeout de um usuário')
+    .setDescription("Remove a user's timeout")
     .addStringOption(options.user())
     .addStringOption(options.reason),
   async execute(interaction) {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const record = await moderation.unmute({
       ...context(interaction),
-      target: await resolveTarget(interaction.guild, interaction.options.getString('usuario', true)),
-      reason: interaction.options.getString('motivo', true),
+      target: await resolveTarget(interaction.guild, interaction.options.getString('user', true)),
+      reason: interaction.options.getString('reason', true),
     });
-    await interaction.editReply({ embeds: [recordEmbed(record, 'Usuário desmutado')] });
+    await interaction.editReply({ embeds: [recordEmbed(record, 'User unmuted')] });
   },
 };

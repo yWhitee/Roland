@@ -7,11 +7,11 @@ const context = (interaction) => ({ guild: interaction.guild, moderator: interac
 const replyError = async (interaction, error) => {
   const embeds = [errorEmbed(userMessage(error))];
   try {
-    if (interaction.isChatInputCommand() && interaction.deferred && !interaction.replied) await interaction.editReply({ embeds });
-    else if (interaction.deferred || interaction.replied) await interaction.followUp({ embeds, flags: MessageFlags.Ephemeral });
+    if (interaction.deferred && !interaction.replied) await interaction.editReply({ embeds, components: [] });
+    else if (interaction.replied) await interaction.followUp({ embeds, flags: MessageFlags.Ephemeral });
     else await interaction.reply({ embeds, flags: MessageFlags.Ephemeral });
   } catch (failure) {
-    console.error(`Falha ao responder interação: ${failure.message}`);
+    console.error(`Failed to reply to interaction: ${failure.message}`);
   }
 };
 

@@ -15,50 +15,50 @@ const { MAX_FIELDS, toEmbed, isEmpty } = require('./sessions');
 
 const SECTIONS = {
   body: {
-    label: 'Título e descrição',
+    label: 'Title & description',
     inputs: [
-      ['title', 'Título', { max: 256 }],
-      ['url', 'URL do título', { max: 2000 }],
-      ['description', 'Descrição', { max: 4000, style: TextInputStyle.Paragraph }],
-      ['color', 'Cor (hexadecimal)', { max: 7, placeholder: '#5865F2' }],
+      ['title', 'Title', { max: 256 }],
+      ['url', 'Title URL', { max: 2000 }],
+      ['description', 'Description', { max: 4000, style: TextInputStyle.Paragraph }],
+      ['color', 'Color (hex)', { max: 7, placeholder: '#5865F2' }],
     ],
   },
   author: {
-    label: 'Autor',
+    label: 'Author',
     inputs: [
-      ['authorName', 'Nome do autor', { max: 256 }],
-      ['authorIcon', 'Ícone do autor (URL)', { max: 2000 }],
-      ['authorUrl', 'URL do autor', { max: 2000 }],
+      ['authorName', 'Author name', { max: 256 }],
+      ['authorIcon', 'Author icon URL', { max: 2000 }],
+      ['authorUrl', 'Author URL', { max: 2000 }],
     ],
   },
   images: {
-    label: 'Imagens',
+    label: 'Images',
     inputs: [
-      ['thumbnail', 'Thumbnail (URL)', { max: 2000 }],
-      ['image', 'Imagem principal (URL)', { max: 2000 }],
+      ['thumbnail', 'Thumbnail URL', { max: 2000 }],
+      ['image', 'Main image URL', { max: 2000 }],
     ],
   },
   footer: {
-    label: 'Rodapé',
+    label: 'Footer',
     inputs: [
-      ['footer', 'Texto do rodapé', { max: 2048, style: TextInputStyle.Paragraph }],
-      ['footerIcon', 'Ícone do rodapé (URL)', { max: 2000 }],
+      ['footer', 'Footer text', { max: 2048, style: TextInputStyle.Paragraph }],
+      ['footerIcon', 'Footer icon URL', { max: 2000 }],
     ],
   },
   content: {
-    label: 'Conteúdo',
-    inputs: [['content', 'Conteúdo da mensagem (fora do embed)', { max: 2000, style: TextInputStyle.Paragraph }]],
+    label: 'Message content',
+    inputs: [['content', 'Message content (outside the embed)', { max: 2000, style: TextInputStyle.Paragraph }]],
   },
 };
 
 const VIEWS = {
-  main: 'configure o embed usando os botões abaixo.',
-  editfield: 'escolha o campo que deseja editar.',
-  removefield: 'escolha o campo que deseja remover.',
-  send: 'escolha o canal onde o embed será enviado.',
+  main: 'configure the embed using the buttons below.',
+  editfield: 'choose the field you want to edit.',
+  removefield: 'choose the field you want to remove.',
+  send: 'choose the channel to send the embed to.',
 };
 
-const customId = (session, ...parts) => ['embed', session.id, ...parts].join(':');
+const customId = (session, ...parts) => [session.prefix, session.id, ...parts].join(':');
 
 const button = (session, action, label, style = ButtonStyle.Secondary, disabled = false) =>
   new ButtonBuilder().setCustomId(customId(session, action)).setLabel(label).setStyle(style).setDisabled(disabled);
@@ -68,19 +68,19 @@ const row = (...components) => new ActionRowBuilder().addComponents(components);
 const fieldSelect = (session, action) =>
   new StringSelectMenuBuilder()
     .setCustomId(customId(session, action))
-    .setPlaceholder('Selecione um campo')
+    .setPlaceholder('Select a field')
     .addOptions(session.state.fields.map((field, index) => ({ label: `${index + 1}. ${field.name}`.slice(0, 100), value: String(index) })));
 
 const components = (session, view) => {
   const { fields, timestamp } = session.state;
-  const back = row(button(session, 'back', 'Voltar'));
+  const back = row(button(session, 'back', 'Back'));
 
   if (view === 'editfield') return [row(fieldSelect(session, 'pickedit')), back];
   if (view === 'removefield') return [row(fieldSelect(session, 'pickremove')), back];
   if (view === 'send') {
     const channels = new ChannelSelectMenuBuilder()
       .setCustomId(customId(session, 'channel'))
-      .setPlaceholder('Escolha o canal de envio')
+      .setPlaceholder('Choose a destination channel')
       .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement);
     return [row(channels), back];
   }
@@ -88,27 +88,28 @@ const components = (session, view) => {
   return [
     row(...Object.entries(SECTIONS).map(([key, section]) => button(session, `section:${key}`, section.label))),
     row(
-      button(session, 'addfield', 'Adicionar campo', ButtonStyle.Primary, fields.length >= MAX_FIELDS),
-      button(session, 'editfield', 'Editar campo', ButtonStyle.Secondary, !fields.length),
-      button(session, 'removefield', 'Remover campo', ButtonStyle.Secondary, !fields.length),
-      button(session, 'timestamp', `Timestamp: ${timestamp ? 'ativado' : 'desativado'}`),
+      button(session, 'addfield', 'Add field', ButtonStyle.Primary, fields.length >= MAX_FIELDS),
+      button(session, 'editfield', 'Edit field', ButtonStyle.Secondary, !fields.length),
+      button(session, 'removefield', 'Remove field', ButtonStyle.Secondary, !fields.length),
+      button(session, 'timestamp', `Timestamp: ${timestamp ? 'on' : 'off'}`),
     ),
     row(
-      button(session, 'preview', 'Visualizar'),
-      button(session, 'reset', 'Limpar', ButtonStyle.Danger),
-      button(session, 'send', 'Enviar', ButtonStyle.Success),
-      button(session, 'cancel', 'Cancelar', ButtonStyle.Danger),
+      button(session, 'preview', 'Preview'),
+      button(session, 'reset', 'Clear', ButtonStyle.Danger),
+      button(session, 'send', 'Send', ButtonStyle.Success),
+      button(session, 'cancel', 'Cancel', ButtonStyle.Danger),
     ),
   ];
 };
 
 const panel = (session, view = 'main') => {
   const { state } = session;
-  const lines = [`**Embed Builder** — ${VIEWS[view]}`];
-  if (state.content) lines.push('', '**Conteúdo da mensagem:**', state.content.length > 1500 ? `${state.content.slice(0, 1500)}…` : state.content);
+  const lines = [`**${session.title}** — ${VIEWS[view]}`];
+  if (session.note) lines.push(session.note);
+  if (state.content) lines.push('', '**Message content:**', state.content.length > 1500 ? `${state.content.slice(0, 1500)}…` : state.content);
 
   const preview = isEmpty(state)
-    ? new EmbedBuilder().setDescription('*O embed está vazio. Use os botões abaixo para configurá-lo.*')
+    ? new EmbedBuilder().setDescription('*The embed is empty. Use the buttons below to configure it.*')
     : toEmbed(state);
 
   return { content: lines.join('\n'), embeds: [preview], components: components(session, view), allowedMentions: { parse: [] } };
@@ -133,15 +134,15 @@ const fieldModal = (session, index) => {
   const field = session.state.fields[index] ?? { name: '', value: '', inline: false };
   const inline = new StringSelectMenuBuilder()
     .setCustomId('inline')
-    .addOptions({ label: 'Sim', value: 'yes', default: field.inline }, { label: 'Não', value: 'no', default: !field.inline });
+    .addOptions({ label: 'Yes', value: 'yes', default: field.inline }, { label: 'No', value: 'no', default: !field.inline });
 
   return new ModalBuilder()
     .setCustomId(customId(session, 'field', index ?? 'new'))
-    .setTitle(index === undefined ? 'Adicionar campo' : 'Editar campo')
+    .setTitle(index === undefined ? 'Add field' : 'Edit field')
     .addLabelComponents(
-      textInput('name', 'Nome do campo', { max: 256, value: field.name, required: true }),
-      textInput('value', 'Valor do campo', { max: 1024, style: TextInputStyle.Paragraph, value: field.value, required: true }),
-      new LabelBuilder().setLabel('Exibir em linha (inline)').setStringSelectMenuComponent(inline),
+      textInput('name', 'Field name', { max: 256, value: field.name, required: true }),
+      textInput('value', 'Field value', { max: 1024, style: TextInputStyle.Paragraph, value: field.value, required: true }),
+      new LabelBuilder().setLabel('Display inline').setStringSelectMenuComponent(inline),
     );
 };
 

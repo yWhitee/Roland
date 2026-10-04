@@ -12,14 +12,14 @@ const render = (guildId, userId, requestedPage) => {
 
   const embed = new EmbedBuilder()
     .setColor(Colors.info)
-    .setTitle('Histórico de moderação')
-    .setDescription(`**Usuário:** <@${userId}> (\`${userId}\`)\n**Total de registros:** ${total}${total ? '' : '\n\nNenhuma punição registrada.'}`)
+    .setTitle('Moderation history')
+    .setDescription(`**User:** <@${userId}> (\`${userId}\`)\n**Total records:** ${total}${total ? '' : '\n\nNo punishments recorded.'}`)
     .addFields(records.map((record) => ({ name: `#${record.id} • ${ACTIONS[record.type].label}`, value: describe(record, { user: false }) })))
-    .setFooter({ text: `Página ${page + 1} de ${pages}` });
+    .setFooter({ text: `Page ${page + 1} of ${pages}` });
 
   const navigation = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`modlog:${userId}:${page - 1}`).setLabel('Anterior').setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
-    new ButtonBuilder().setCustomId(`modlog:${userId}:${page + 1}`).setLabel('Próxima').setStyle(ButtonStyle.Secondary).setDisabled(page >= pages - 1),
+    new ButtonBuilder().setCustomId(`modlog:${userId}:${page - 1}`).setLabel('Previous').setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
+    new ButtonBuilder().setCustomId(`modlog:${userId}:${page + 1}`).setLabel('Next').setStyle(ButtonStyle.Secondary).setDisabled(page >= pages - 1),
   );
 
   return { embeds: [embed], components: pages > 1 ? [navigation] : [] };
@@ -30,11 +30,11 @@ module.exports = {
   render,
   data: new SlashCommandBuilder()
     .setName('modlog')
-    .setDescription('Mostra o histórico de punições de um usuário')
+    .setDescription("Show a user's punishment history")
     .addStringOption(options.user()),
   async execute(interaction) {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    const user = await resolveUser(interaction.client, interaction.options.getString('usuario', true));
+    const user = await resolveUser(interaction.client, interaction.options.getString('user', true));
     await interaction.editReply(render(interaction.guildId, user.id, 0));
   },
   async handleComponent(interaction) {

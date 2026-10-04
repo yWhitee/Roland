@@ -10,7 +10,7 @@ const sweep = async (client, now = Date.now()) => {
   try {
     for (const ban of punishments.dueBans(now)) {
       await moderation.expireBan(client, ban).catch((error) => {
-        console.error(`Falha ao remover o ban temporário #${ban.id}: ${error.message}`);
+        console.error(`Failed to lift temporary ban #${ban.id}: ${error.message}`);
       });
     }
   } finally {
@@ -19,7 +19,7 @@ const sweep = async (client, now = Date.now()) => {
 };
 
 const start = (client) => {
-  const run = () => sweep(client).catch((error) => console.error(`Falha ao verificar bans temporários: ${error.message}`));
+  const run = () => sweep(client).catch((error) => console.error(`Failed to check temporary bans: ${error.message}`));
   run();
   setInterval(run, INTERVAL);
 };

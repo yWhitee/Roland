@@ -8,34 +8,34 @@ module.exports = {
   level: Level.ADMINISTRATOR,
   data: new SlashCommandBuilder()
     .setName('logs')
-    .setDescription('Ativa ou desativa as logs de moderação')
+    .setDescription('Enable or disable moderation and ticket logs')
     .addStringOption((option) =>
       option
-        .setName('estado')
-        .setDescription('Ativar ou desativar')
+        .setName('state')
+        .setDescription('Turn logs on or off')
         .setRequired(true)
         .addChoices({ name: 'on', value: 'on' }, { name: 'off', value: 'off' }),
     )
     .addChannelOption((option) =>
       option
-        .setName('canal')
-        .setDescription('Canal que receberá as logs (obrigatório para on)')
+        .setName('channel')
+        .setDescription('Channel that will receive the logs (required for on)')
         .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement),
     ),
   async execute(interaction) {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-    if (interaction.options.getString('estado', true) === 'off') {
+    if (interaction.options.getString('state', true) === 'off') {
       logging.disable(interaction.guild);
-      return interaction.editReply({ embeds: [successEmbed('Logs de moderação desativadas.')] });
+      return interaction.editReply({ embeds: [successEmbed('Logs disabled.')] });
     }
 
-    const option = interaction.options.getChannel('canal');
-    if (!option) throw new UserError('Informe o canal para ativar as logs. Ex: /logs on #mod-logs');
+    const option = interaction.options.getChannel('channel');
+    if (!option) throw new UserError('Provide a channel to enable logs, e.g. /logs on #mod-logs');
     const channel = await interaction.guild.channels.fetch(option.id).catch(() => null);
-    if (!channel?.isTextBased()) throw new UserError('Canal inválido.');
+    if (!channel?.isTextBased()) throw new UserError('Invalid channel.');
 
     await logging.enable(interaction.guild, channel, interaction.member);
-    return interaction.editReply({ embeds: [successEmbed(`Logs de moderação ativadas em ${channel}.`)] });
+    return interaction.editReply({ embeds: [successEmbed(`Logs enabled in ${channel}.`)] });
   },
 };

@@ -26,6 +26,42 @@ const migrations = [
     log_channel_id TEXT,
     logs_enabled INTEGER NOT NULL DEFAULT 0
   );`,
+  `CREATE TABLE ticket_panels (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    message_id TEXT NOT NULL UNIQUE,
+    category_id TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE ticket_counters (
+    guild_id TEXT PRIMARY KEY,
+    last_number INTEGER NOT NULL
+  );
+  CREATE TABLE tickets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id TEXT NOT NULL,
+    number INTEGER NOT NULL,
+    panel_id INTEGER REFERENCES ticket_panels (id),
+    channel_id TEXT,
+    control_message_id TEXT,
+    creator_id TEXT NOT NULL,
+    roblox_username TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('OPEN', 'CLAIMED', 'CLOSED', 'DELETED')),
+    created_at INTEGER NOT NULL,
+    claimed_by TEXT,
+    claimed_at INTEGER,
+    closed_by TEXT,
+    closed_at INTEGER,
+    deleted_by TEXT,
+    deleted_at INTEGER,
+    UNIQUE (guild_id, number)
+  );
+  CREATE UNIQUE INDEX tickets_one_active_per_creator ON tickets (guild_id, creator_id) WHERE status IN ('OPEN', 'CLAIMED');
+  CREATE INDEX tickets_channel ON tickets (channel_id);`,
 ];
 
 let db;
@@ -54,4 +90,4 @@ const open = (file = DEFAULT_PATH) => {
 
 const get = () => db ?? open();
 
-module.exports = { open, get, close };
+module.exports = { migrations, open, get, close };

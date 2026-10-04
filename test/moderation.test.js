@@ -1,8 +1,5 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
 const { Collection } = require('discord.js');
 const database = require('../src/database');
 const punishments = require('../src/database/punishments');
@@ -12,188 +9,195 @@ const logging = require('../src/services/logging');
 const tempBans = require('../src/services/tempBans');
 const { ROLES } = require('../src/permissions');
 const { UserError } = require('../src/utils/errors');
+const { BOT_ID, apiError, makeGuild, makeMember, tempDatabase } = require('./helpers/discord');
 
-const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'roland-')), 'test.db');
-const BOT_ID = '900000000000000000';
+const file = tempDatabase();
 const DAY = 86_400_000;
-let nextId = 100000000000000000n;
-
-const apiError = (code, status = 404) => Object.assign(new Error('api'), { code, status });
-
-const makeGuild = () => {
-  const banned = new Set();
-  const logs = [];
-  const guild = {
-    id: String(nextId++),
-    name: 'Servidor Teste',
-    client: { user: { id: BOT_ID } },
-    banned,
-    logs,
-    bans: {
-      fetch: async ({ user }) => {
-        if (!banned.has(user)) throw apiError(10026);
-        return {};
-      },
-      remove: async (id) => {
-        if (!banned.has(id)) throw apiError(10026);
-        banned.delete(id);
-      },
-    },
-    members: { ban: async (id) => banned.add(id) },
-    channels: { fetch: async () => ({ send: async (payload) => logs.push(payload) }) },
-  };
-  return guild;
-};
-
-const makeMember = (role, { dm = true } = {}) => {
-  const id = String(nextId++);
-  const state = { kicked: false, timeoutUntil: null, dms: [] };
-  return {
-    id,
-    state,
-    client: { user: { id: BOT_ID } },
-    roles: { cache: new Map(role ? [[role, {}]] : []) },
-    user: {
-      id,
-      tag: `user${id}`,
-      send: async (payload) => {
-        if (!dm) throw apiError(50007, 403);
-        state.dms.push(payload);
-      },
-    },
-    kick: async () => {
-      state.kicked = true;
-    },
-    isCommunicationDisabled: () => state.timeoutUntil !== null && state.timeoutUntil > Date.now(),
-    disableCommunicationUntil: async (until) => {
-      state.timeoutUntil = until;
-    },
-    timeout: async (value) => {
-      state.timeoutUntil = value === null ? null : Date.now() + value;
-    },
-  };
-};
 
 const target = (member) => ({ user: member.user, member });
 const clientFor = (guild) => ({ user: { id: BOT_ID }, guilds: { cache: new Map([[guild.id, guild]]) } });
+const logs = (guild) => guild.logChannel.sent;
+const dm = (member) => member.state.dms.at(-1).payload.embeds[0].toJSON();
 
 test.before(() => database.open(file));
 test.after(() => database.close());
 
-test('ban temporário registra, envia log e expira após reinicialização', async () => {
+test('a temporary ban is recorded, logged and lifted after a restart', async () => {
   const guild = makeGuild();
-  guildSettings.enableLogs(guild.id, 'logs');
+  guildSettings.enableLogs(guild.id, guild.logChannel.id);
   const moderator = makeMember(ROLES.SENIOR_MODERATOR);
   const victim = makeMember();
 
   const start = Date.now();
-  const record = await moderation.ban({ guild, moderator, target: target(victim), duration: '7d', reason: 'Spam', channelId: 'c' });
+  const { record, dmSent } = await moderation.ban({ guild, moderator, target: target(victim), duration: '7d', reason: 'Spam', channelId: 'c' });
   assert.equal(record.type, 'ban');
   assert.equal(record.active, true);
   assert.equal(record.duration, '7d');
   assert.ok(Math.abs(record.expires_at - (start + 7 * DAY)) < 1000);
   assert.ok(guild.banned.has(victim.id));
-  assert.equal(guild.logs.length, 1);
+  assert.equal(dmSent, true);
+  assert.equal(logs(guild).length, 1);
 
   database.close();
   database.open(file);
 
   await tempBans.sweep(clientFor(guild), start + 2 * DAY);
-  assert.ok(guild.banned.has(victim.id), 'faltam 5 dias, deve continuar banido');
+  assert.ok(guild.banned.has(victim.id), 'five days remain, the user must stay banned');
   assert.equal(punishments.findById(record.id).active, true);
 
   await tempBans.sweep(clientFor(guild), start + 30 * DAY);
-  assert.ok(!guild.banned.has(victim.id), 'após o término, deve ser desbanido');
+  assert.ok(!guild.banned.has(victim.id), 'the user must be unbanned after expiration');
   assert.equal(punishments.findById(record.id).active, false);
 
   const [unban] = punishments.listByUser(guild.id, victim.id, 1);
   assert.equal(unban.type, 'unban');
   assert.equal(unban.moderator_id, BOT_ID);
-  assert.match(unban.reason, /expirado/);
-  assert.equal(guild.logs.length, 2);
+  assert.match(unban.reason, /expired/);
+  assert.equal(logs(guild).length, 2);
 });
 
-test('ban permanente nunca expira automaticamente', async () => {
+test('a permanent ban never expires automatically', async () => {
   const guild = makeGuild();
   const victim = makeMember();
-  const record = await moderation.ban({ guild, moderator: makeMember(ROLES.ADMINISTRATOR), target: target(victim), duration: 'forever', reason: 'r' });
+  const { record } = await moderation.ban({ guild, moderator: makeMember(ROLES.ADMINISTRATOR), target: target(victim), duration: 'forever', reason: 'r' });
   assert.equal(record.expires_at, null);
   await tempBans.sweep(clientFor(guild), Date.now() + 1000 * 365 * DAY);
   assert.ok(guild.banned.has(victim.id));
 });
 
-test('ban: já banido, Creator, cargo superior, motivo vazio e duração inválida', async () => {
+test('ban: already banned, Creator, higher role, empty reason and invalid duration', async () => {
   const guild = makeGuild();
   const admin = makeMember(ROLES.ADMINISTRATOR);
   const victim = makeMember();
   await moderation.ban({ guild, moderator: admin, target: target(victim), duration: '1d', reason: 'r' });
 
-  await assert.rejects(moderation.ban({ guild, moderator: admin, target: target(victim), duration: '1d', reason: 'r' }), /já está banido/);
+  await assert.rejects(moderation.ban({ guild, moderator: admin, target: target(victim), duration: '1d', reason: 'r' }), /already banned/);
   await assert.rejects(moderation.ban({ guild, moderator: admin, target: target(makeMember(ROLES.CREATOR)), duration: '1d', reason: 'r' }), /Creator/);
-  await assert.rejects(moderation.ban({ guild, moderator: makeMember(ROLES.SENIOR_MODERATOR), target: target(makeMember(ROLES.ADMINISTRATOR)), duration: '1d', reason: 'r' }), /igual ou superior/);
-  await assert.rejects(moderation.ban({ guild, moderator: admin, target: target(makeMember()), duration: '1d', reason: '   ' }), /motivo/);
-  await assert.rejects(moderation.ban({ guild, moderator: admin, target: target(makeMember()), duration: '10x', reason: 'r' }), /Duração inválida/);
+  await assert.rejects(
+    moderation.ban({ guild, moderator: makeMember(ROLES.SENIOR_MODERATOR), target: target(makeMember(ROLES.ADMINISTRATOR)), duration: '1d', reason: 'r' }),
+    /equal or higher/,
+  );
+  await assert.rejects(moderation.ban({ guild, moderator: admin, target: target(makeMember()), duration: '1d', reason: '   ' }), /reason/);
+  await assert.rejects(moderation.ban({ guild, moderator: admin, target: target(makeMember()), duration: '10x', reason: 'r' }), /Invalid duration/);
   assert.equal(guild.banned.size, 1);
 });
 
-test('unban manual desativa o ban temporário', async () => {
+test('ban DM states the ban, duration, reason, server and executor', async () => {
+  const guild = makeGuild();
+  const moderator = makeMember(ROLES.ADMINISTRATOR);
+
+  const temporary = makeMember();
+  await moderation.ban({ guild, moderator, target: target(temporary), duration: '7d', reason: 'Exploiting' });
+  const notice = dm(temporary);
+  assert.equal(notice.title, 'You have been banned');
+  for (const text of ['Test Server', '7 days', 'Exploiting', moderator.user.tag, 'Expires']) assert.ok(notice.description.includes(text), text);
+
+  const permanent = makeMember();
+  await moderation.ban({ guild, moderator, target: target(permanent), duration: 'forever', reason: 'Raid' });
+  assert.match(dm(permanent).description, /Permanent/);
+
+  const closed = makeMember(null, { dm: false });
+  const result = await moderation.ban({ guild, moderator, target: target(closed), duration: '1d', reason: 'r' });
+  assert.equal(result.dmSent, false);
+  assert.ok(guild.banned.has(closed.id), 'the ban succeeds even when the DM fails');
+});
+
+test('the ban DM is withdrawn if the ban itself fails', async () => {
+  const guild = makeGuild();
+  guild.members.ban = async () => Promise.reject(apiError(50013, 403));
+  const victim = makeMember();
+
+  await assert.rejects(moderation.ban({ guild, moderator: makeMember(ROLES.ADMINISTRATOR), target: target(victim), duration: '1d', reason: 'r' }));
+  assert.equal(victim.state.dms[0].deleted, true);
+  assert.equal(punishments.countByUser(guild.id, victim.id), 0);
+});
+
+test('a manual unban deactivates the temporary ban', async () => {
   const guild = makeGuild();
   const admin = makeMember(ROLES.ADMINISTRATOR);
   const victim = makeMember();
-  const ban = await moderation.ban({ guild, moderator: admin, target: target(victim), duration: '1h', reason: 'r' });
+  const { record: ban } = await moderation.ban({ guild, moderator: admin, target: target(victim), duration: '1h', reason: 'r' });
 
-  const unban = await moderation.unban({ guild, moderator: admin, target: { user: victim.user, member: null }, reason: 'Revisado' });
+  const unban = await moderation.unban({ guild, moderator: admin, target: { user: victim.user, member: null }, reason: 'Reviewed' });
   assert.equal(unban.type, 'unban');
   assert.equal(punishments.findById(ban.id).active, false);
-  await assert.rejects(moderation.unban({ guild, moderator: admin, target: { user: victim.user, member: null }, reason: 'r' }), /não está banido/);
+  await assert.rejects(moderation.unban({ guild, moderator: admin, target: { user: victim.user, member: null }, reason: 'r' }), /not banned/);
 
   const before = punishments.countByUser(guild.id, victim.id);
   await tempBans.sweep(clientFor(guild), Date.now() + DAY);
   assert.equal(punishments.countByUser(guild.id, victim.id), before);
 });
 
-test('kick exige membro e registra', async () => {
+test('kick requires a member, records the action and sends a DM', async () => {
   const guild = makeGuild();
   const moderator = makeMember(ROLES.SENIOR_MODERATOR);
   const victim = makeMember(ROLES.MODERATOR);
-  const record = await moderation.kick({ guild, moderator, target: target(victim), reason: 'r' });
+
+  const { record, dmSent } = await moderation.kick({ guild, moderator, target: target(victim), reason: 'Toxicity' });
   assert.equal(record.type, 'kick');
   assert.ok(victim.state.kicked);
-  await assert.rejects(moderation.kick({ guild, moderator, target: { user: makeMember().user, member: null }, reason: 'r' }), /não está no servidor/);
+  assert.equal(dmSent, true);
+  const notice = dm(victim);
+  assert.equal(notice.title, 'You have been kicked');
+  for (const text of ['Test Server', 'Toxicity', moderator.user.tag]) assert.ok(notice.description.includes(text), text);
+
+  const closed = makeMember(null, { dm: false });
+  assert.equal((await moderation.kick({ guild, moderator, target: target(closed), reason: 'r' })).dmSent, false);
+  assert.ok(closed.state.kicked);
+
+  await assert.rejects(moderation.kick({ guild, moderator, target: { user: makeMember().user, member: null }, reason: 'r' }), /not a member/);
 });
 
-test('mute e unmute com validações', async () => {
+test('mute and unmute with validation and a mute DM', async () => {
   const guild = makeGuild();
   const moderator = makeMember(ROLES.MODERATOR);
   const victim = makeMember();
 
-  await assert.rejects(moderation.mute({ guild, moderator, target: target(victim), duration: 'forever', reason: 'r' }), /permanente/);
-  await assert.rejects(moderation.mute({ guild, moderator, target: target(victim), duration: '29d', reason: 'r' }), /28 dias/);
-  await assert.rejects(moderation.mute({ guild, moderator, target: target(makeMember(ROLES.MODERATOR)), duration: '1h', reason: 'r' }), /igual ou superior/);
+  await assert.rejects(moderation.mute({ guild, moderator, target: target(victim), duration: 'forever', reason: 'r' }), /permanent/);
+  await assert.rejects(moderation.mute({ guild, moderator, target: target(victim), duration: '29d', reason: 'r' }), /28 days/);
+  await assert.rejects(moderation.mute({ guild, moderator, target: target(makeMember(ROLES.MODERATOR)), duration: '1h', reason: 'r' }), /equal or higher/);
+  assert.equal(victim.state.dms.length, 0, 'no DM when the mute is rejected');
 
   const start = Date.now();
-  const record = await moderation.mute({ guild, moderator, target: target(victim), duration: '30m', reason: 'Flood' });
+  const { record, dmSent } = await moderation.mute({ guild, moderator, target: target(victim), duration: '30m', reason: 'Flood' });
   assert.equal(record.duration, '30m');
   assert.ok(Math.abs(record.expires_at - (start + 30 * 60_000)) < 1000);
   assert.equal(victim.state.timeoutUntil, record.expires_at);
-  await assert.rejects(moderation.mute({ guild, moderator, target: target(victim), duration: '1h', reason: 'r' }), /já está mutado/);
+  assert.equal(dmSent, true);
+  const notice = dm(victim);
+  assert.equal(notice.title, 'You have been muted');
+  for (const text of ['Test Server', '30 minutes', 'Flood', moderator.user.tag]) assert.ok(notice.description.includes(text), text);
+
+  await assert.rejects(moderation.mute({ guild, moderator, target: target(victim), duration: '1h', reason: 'r' }), /already muted/);
+
+  const closed = makeMember(null, { dm: false });
+  const silent = await moderation.mute({ guild, moderator, target: target(closed), duration: '1h', reason: 'r' });
+  assert.equal(silent.dmSent, false);
+  assert.ok(closed.isCommunicationDisabled());
 
   const senior = makeMember(ROLES.SENIOR_MODERATOR);
   const unmute = await moderation.unmute({ guild, moderator: senior, target: target(victim), reason: 'r' });
   assert.equal(unmute.type, 'unmute');
   assert.equal(victim.state.timeoutUntil, null);
-  await assert.rejects(moderation.unmute({ guild, moderator: senior, target: target(victim), reason: 'r' }), /não está mutado/);
+  await assert.rejects(moderation.unmute({ guild, moderator: senior, target: target(victim), reason: 'r' }), /not muted/);
 });
 
-test('warn é registrado mesmo com DM fechada', async () => {
+test('Moderators can moderate Support staff, and Support cannot moderate peers', async () => {
+  const guild = makeGuild();
+  const support = makeMember(ROLES.SUPPORT);
+  await moderation.warn({ guild, moderator: makeMember(ROLES.MODERATOR), target: target(support), reason: 'r' });
+  await assert.rejects(moderation.warn({ guild, moderator: support, target: target(makeMember(ROLES.SUPPORT)), reason: 'r' }), /equal or higher/);
+});
+
+test('a warn is recorded even when DMs are closed', async () => {
   const guild = makeGuild();
   const moderator = makeMember(ROLES.MODERATOR);
 
   const open = makeMember();
-  const sent = await moderation.warn({ guild, moderator, target: target(open), reason: 'Linguagem' });
+  const sent = await moderation.warn({ guild, moderator, target: target(open), reason: 'Language' });
   assert.equal(sent.dmSent, true);
-  assert.equal(open.state.dms.length, 1);
-  assert.match(open.state.dms[0].embeds[0].data.description, /Linguagem/);
+  assert.equal(dm(open).title, 'You have received a warning');
+  assert.match(dm(open).description, /Language/);
 
   const closed = makeMember(null, { dm: false });
   const blocked = await moderation.warn({ guild, moderator, target: target(closed), reason: 'Spam' });
@@ -223,11 +227,9 @@ const makeChannel = ({ recent, old, authors, pinned = [] }) => {
   for (let index = 0; index < old; index++) add(20 * DAY + (old - index) * 1000, index);
   for (let index = 0; index < recent; index++) add((recent - index) * 1000, index);
 
-  const bulkDeleted = [];
   return {
-    id: 'canal',
+    id: 'channel',
     store,
-    bulkDeleted,
     messages: {
       fetch: async ({ limit, before }) => {
         const list = [...store.values()]
@@ -240,23 +242,22 @@ const makeChannel = ({ recent, old, authors, pinned = [] }) => {
     bulkDelete: async (messages) => {
       assert.ok(messages.length >= 1 && messages.length <= 100);
       for (const message of messages) {
-        assert.ok(now - message.createdTimestamp < 14 * DAY, 'bulk delete só pode receber mensagens recentes');
+        assert.ok(now - message.createdTimestamp < 14 * DAY, 'bulk delete only receives recent messages');
         store.delete(message.id);
       }
-      bulkDeleted.push(messages.length);
       return new Collection(messages.map((message) => [message.id, message]));
     },
   };
 };
 
-test('clear geral, com mensagens antigas e respeitando fixadas', async () => {
+test('clear removes recent and old messages and skips pinned ones', async () => {
   const guild = makeGuild();
   const moderator = makeMember(ROLES.MODERATOR);
 
   const channel = makeChannel({ recent: 150, old: 100, authors: ['a', 'b'] });
   const small = await moderation.clear({ guild, moderator, channel, amount: 50 });
   assert.deepEqual(small.metadata, { requested: 50, deleted: 50 });
-  assert.equal(small.channel_id, 'canal');
+  assert.equal(small.channel_id, 'channel');
   assert.equal(channel.store.size, 200);
 
   const big = await moderation.clear({ guild, moderator, channel, amount: 5000 });
@@ -268,20 +269,20 @@ test('clear geral, com mensagens antigas e respeitando fixadas', async () => {
   assert.equal(result.metadata.deleted, 9);
   assert.equal(withPinned.store.size, 1);
 
-  await assert.rejects(moderation.clear({ guild, moderator, channel, amount: 5001 }), /entre 1 e 5000/);
-  await assert.rejects(moderation.clear({ guild, moderator, channel: {}, amount: 1 }), /não suporta/);
+  await assert.rejects(moderation.clear({ guild, moderator, channel, amount: 5001 }), /between 1 and 5000/);
+  await assert.rejects(moderation.clear({ guild, moderator, channel: {}, amount: 1 }), /cannot be cleared/);
 });
 
-test('clear direcionado apaga apenas mensagens do usuário', async () => {
+test('targeted clear only removes messages from that user', async () => {
   const guild = makeGuild();
   const moderator = makeMember(ROLES.MODERATOR);
   const victim = makeMember();
-  const channel = makeChannel({ recent: 300, old: 60, authors: [victim.id, 'outro', 'outro'] });
+  const channel = makeChannel({ recent: 300, old: 60, authors: [victim.id, 'other', 'other'] });
 
   const record = await moderation.clear({ guild, moderator, channel, amount: 50, target: target(victim) });
   assert.equal(record.user_id, victim.id);
   assert.deepEqual(record.metadata, { requested: 50, deleted: 50 });
-  assert.equal([...channel.store.values()].filter((message) => message.author.id === 'outro').length, 240);
+  assert.equal([...channel.store.values()].filter((message) => message.author.id === 'other').length, 240);
 
   const all = await moderation.clear({ guild, moderator, channel, amount: 5000, target: target(victim) });
   assert.equal(all.metadata.deleted, 70);
@@ -290,7 +291,7 @@ test('clear direcionado apaga apenas mensagens do usuário', async () => {
   await assert.rejects(moderation.clear({ guild, moderator, channel, amount: 5, target: target(makeMember(ROLES.CREATOR)) }), /Creator/);
 });
 
-test('modlog lista todo o histórico com paginação', async () => {
+test('modlog lists the full history with pagination', async () => {
   const guild = makeGuild();
   const admin = makeMember(ROLES.ADMINISTRATOR);
   const victim = makeMember();
@@ -315,32 +316,33 @@ test('modlog lista todo o histórico com paginação', async () => {
 
   const { render } = require('../src/commands/modlog');
   const page = render(guild.id, victim.id, 0);
+  assert.equal(page.embeds[0].data.title, 'Moderation history');
   assert.equal(page.embeds[0].data.fields.length, 5);
   assert.equal(page.components.length, 1);
   assert.ok(JSON.stringify(page.embeds[0].toJSON()).length < 6000);
 });
 
-test('logs: on, off e reativação', async () => {
+test('logs: on, off and re-enable', async () => {
   const guild = makeGuild();
   const moderator = makeMember(ROLES.ADMINISTRATOR);
-  const sent = [];
-  const channel = { id: 'logs', send: async (payload) => sent.push(payload) };
 
-  await logging.enable(guild, channel, moderator);
-  assert.equal(sent.length, 1);
+  await logging.enable(guild, guild.logChannel, moderator);
+  assert.equal(logs(guild).length, 1);
+  assert.equal(logs(guild)[0].embeds[0].data.title, 'Logs enabled');
   assert.equal(guildSettings.get(guild.id).logs_enabled, 1);
 
   await moderation.warn({ guild, moderator, target: target(makeMember()), reason: 'r' });
-  assert.equal(guild.logs.length, 1);
+  assert.equal(logs(guild).length, 2);
+  assert.equal(logs(guild)[1].embeds[0].data.title, 'Moderation • Warn');
 
   logging.disable(guild);
-  assert.deepEqual(guildSettings.get(guild.id), { guild_id: guild.id, log_channel_id: 'logs', logs_enabled: 0 });
-  assert.throws(() => logging.disable(guild), /já estão desativadas/);
+  assert.deepEqual(guildSettings.get(guild.id), { guild_id: guild.id, log_channel_id: guild.logChannel.id, logs_enabled: 0 });
+  assert.throws(() => logging.disable(guild), /already disabled/);
 
   const victim = makeMember();
   await moderation.warn({ guild, moderator, target: target(victim), reason: 'r' });
-  assert.equal(guild.logs.length, 1);
-  assert.equal(punishments.countByUser(guild.id, victim.id), 1, 'modlog continua com logs desativadas');
+  assert.equal(logs(guild).length, 2);
+  assert.equal(punishments.countByUser(guild.id, victim.id), 1, 'modlog keeps working while logs are off');
 
   const broken = { id: 'x', send: async () => Promise.reject(apiError(50013, 403)) };
   await assert.rejects(logging.enable(guild, broken, moderator), UserError);

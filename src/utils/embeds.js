@@ -1,7 +1,7 @@
 const { EmbedBuilder } = require('discord.js');
 const { formatDuration } = require('./duration');
 
-const Colors = { error: 0xed4245, success: 0x57f287, info: 0x5865f2 };
+const Colors = { error: 0xed4245, success: 0x57f287, info: 0x5865f2, warning: 0xfee75c };
 
 const ACTIONS = {
   ban: { label: 'Ban', color: 0xed4245 },
@@ -17,16 +17,16 @@ const time = (ms) => `<t:${Math.floor(ms / 1000)}:f>`;
 
 const describe = (record, { user = true } = {}) => {
   const lines = [];
-  if (user && record.user_id) lines.push(`**Usuário:** <@${record.user_id}> (\`${record.user_id}\`)`);
-  lines.push(`**Moderador:** <@${record.moderator_id}>`);
-  lines.push(`**Data:** ${time(record.created_at)}`);
+  if (user && record.user_id) lines.push(`**User:** <@${record.user_id}> (\`${record.user_id}\`)`);
+  lines.push(`**Moderator:** <@${record.moderator_id}>`);
+  lines.push(`**Date:** ${time(record.created_at)}`);
   if (record.duration) {
-    lines.push(`**Duração:** ${formatDuration(record.duration)}`);
-    lines.push(`**Término:** ${record.expires_at ? time(record.expires_at) : 'Nunca'}`);
+    lines.push(`**Duration:** ${formatDuration(record.duration)}`);
+    lines.push(`**Expires:** ${record.expires_at ? time(record.expires_at) : 'Never'}`);
   }
-  if (record.channel_id) lines.push(`**Canal:** <#${record.channel_id}>`);
-  if (record.metadata?.requested) lines.push(`**Mensagens apagadas:** ${record.metadata.deleted} de ${record.metadata.requested} solicitadas`);
-  if (record.reason) lines.push(`**Motivo:** ${record.reason}`);
+  if (record.channel_id) lines.push(`**Channel:** <#${record.channel_id}>`);
+  if (record.metadata?.requested) lines.push(`**Messages deleted:** ${record.metadata.deleted} of ${record.metadata.requested} requested`);
+  if (record.reason) lines.push(`**Reason:** ${record.reason}`);
   return lines.join('\n');
 };
 
@@ -35,23 +35,30 @@ const recordEmbed = (record, title) =>
     .setColor(ACTIONS[record.type].color)
     .setTitle(title)
     .setDescription(describe(record))
-    .setFooter({ text: `Registro #${record.id}` })
+    .setFooter({ text: `Record #${record.id}` })
     .setTimestamp(record.created_at);
 
-const warnDmEmbed = (guild, moderator, record) =>
-  new EmbedBuilder()
-    .setColor(ACTIONS.warn.color)
-    .setTitle('Você recebeu um aviso')
-    .setDescription([
-      `**Servidor:** ${guild.name}`,
-      `**Data:** ${time(record.created_at)}`,
-      `**Aplicado por:** ${moderator.user.tag}`,
-      `**Motivo:** ${record.reason}`,
-    ].join('\n'))
-    .setTimestamp(record.created_at);
+const NOTICES = {
+  warn: 'You have received a warning',
+  mute: 'You have been muted',
+  ban: 'You have been banned',
+  kick: 'You have been kicked',
+};
+
+const noticeEmbed = (guild, moderator, { type, reason, duration, expiresAt, createdAt }) => {
+  const lines = [`**Server:** ${guild.name}`, `**Date:** ${time(createdAt)}`];
+  if (duration) lines.push(`**Duration:** ${formatDuration(duration)}`);
+  if (expiresAt) lines.push(`**Expires:** ${time(expiresAt)}`);
+  lines.push(`**Moderator:** ${moderator.user.tag}`, `**Reason:** ${reason}`);
+
+  return new EmbedBuilder().setColor(ACTIONS[type].color).setTitle(NOTICES[type]).setDescription(lines.join('\n')).setTimestamp(createdAt);
+};
+
+const withDmStatus = (embed, dmSent) =>
+  embed.addFields({ name: 'Direct message', value: dmSent ? 'Delivered to the user.' : 'Could not be delivered (DMs closed or blocked).' });
 
 const errorEmbed = (message) => new EmbedBuilder().setColor(Colors.error).setDescription(`❌ ${message}`);
 
 const successEmbed = (message) => new EmbedBuilder().setColor(Colors.success).setDescription(`✅ ${message}`);
 
-module.exports = { ACTIONS, Colors, time, describe, recordEmbed, warnDmEmbed, errorEmbed, successEmbed };
+module.exports = { ACTIONS, Colors, time, describe, recordEmbed, noticeEmbed, withDmStatus, errorEmbed, successEmbed };

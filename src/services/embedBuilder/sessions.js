@@ -6,12 +6,12 @@ const MAX_FIELDS = 25;
 const sessions = new Map();
 
 const URL_KEYS = {
-  url: 'A URL do título',
-  authorIcon: 'O ícone do autor',
-  authorUrl: 'A URL do autor',
-  thumbnail: 'A thumbnail',
-  image: 'A imagem principal',
-  footerIcon: 'O ícone do rodapé',
+  url: 'The title URL',
+  authorIcon: 'The author icon',
+  authorUrl: 'The author URL',
+  thumbnail: 'The thumbnail',
+  image: 'The main image',
+  footerIcon: 'The footer icon',
 };
 
 const emptyState = () => ({
@@ -37,8 +37,8 @@ const touch = (session) => {
   session.timer.unref();
 };
 
-const create = (id, userId) => {
-  const session = { id, userId, state: emptyState() };
+const create = (id, userId, options) => {
+  const session = { ...options, id, userId, state: emptyState() };
   sessions.set(id, session);
   touch(session);
   return session;
@@ -46,8 +46,8 @@ const create = (id, userId) => {
 
 const get = (id, userId) => {
   const session = sessions.get(id);
-  if (!session) throw new UserError('Esta sessão do Embed Builder expirou. Use /embed novamente.');
-  if (session.userId !== userId) throw new UserError('Apenas quem iniciou este Embed Builder pode usá-lo.');
+  if (!session) throw new UserError('This builder session has expired. Run the command again.');
+  if (session.userId !== userId) throw new UserError('Only the person who started this builder can use it.');
   touch(session);
   return session;
 };
@@ -89,14 +89,14 @@ const isEmpty = (state) =>
 
 const validate = (state) => {
   for (const [key, label] of Object.entries(URL_KEYS)) {
-    if (state[key] && !isUrl(state[key])) throw new UserError(`${label} deve ser uma URL válida começando com http:// ou https://.`);
+    if (state[key] && !isUrl(state[key])) throw new UserError(`${label} must be a valid URL starting with http:// or https://.`);
   }
-  if (state.color && !/^#?[0-9a-f]{6}$/i.test(state.color)) throw new UserError('Cor inválida. Use o formato hexadecimal, ex: #5865F2.');
-  if (state.url && !state.title) throw new UserError('Defina um título para usar a URL do título.');
-  if ((state.authorIcon || state.authorUrl) && !state.authorName) throw new UserError('Defina o nome do autor para usar o ícone ou a URL do autor.');
-  if (state.footerIcon && !state.footer) throw new UserError('Defina o texto do rodapé para usar o ícone do rodapé.');
-  if (state.fields.length > MAX_FIELDS) throw new UserError(`O embed pode ter no máximo ${MAX_FIELDS} campos.`);
-  if (embedLength(toEmbed(state).data) > 6000) throw new UserError('O embed ultrapassa o limite de 6000 caracteres do Discord.');
+  if (state.color && !/^#?[0-9a-f]{6}$/i.test(state.color)) throw new UserError('Invalid color. Use a hex code, e.g. #5865F2.');
+  if (state.url && !state.title) throw new UserError('Set a title before adding a title URL.');
+  if ((state.authorIcon || state.authorUrl) && !state.authorName) throw new UserError('Set an author name before adding an author icon or URL.');
+  if (state.footerIcon && !state.footer) throw new UserError('Set footer text before adding a footer icon.');
+  if (state.fields.length > MAX_FIELDS) throw new UserError(`An embed can have at most ${MAX_FIELDS} fields.`);
+  if (embedLength(toEmbed(state).data) > 6000) throw new UserError('The embed exceeds the Discord limit of 6000 characters.');
 };
 
 const update = (session, changes) => {
@@ -106,7 +106,7 @@ const update = (session, changes) => {
 };
 
 const assertNotEmpty = (state) => {
-  if (isEmpty(state)) throw new UserError('O embed está vazio. Configure pelo menos um título, descrição, campo, autor, rodapé ou imagem.');
+  if (isEmpty(state)) throw new UserError('The embed is empty. Add at least a title, description, field, author, footer or image.');
 };
 
 module.exports = { MAX_FIELDS, create, get, remove, reset, update, toEmbed, isEmpty, assertNotEmpty };

@@ -10,16 +10,16 @@ module.exports = {
   level: Level.SENIOR_MODERATOR,
   data: new SlashCommandBuilder()
     .setName('unban')
-    .setDescription('Remove o banimento de um usuário')
+    .setDescription('Unban a user')
     .addStringOption(options.user())
     .addStringOption(options.reason),
   async execute(interaction) {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const record = await moderation.unban({
       ...context(interaction),
-      target: await resolveTarget(interaction.guild, interaction.options.getString('usuario', true)),
-      reason: interaction.options.getString('motivo', true),
+      target: await resolveTarget(interaction.guild, interaction.options.getString('user', true)),
+      reason: interaction.options.getString('reason', true),
     });
-    await interaction.editReply({ embeds: [recordEmbed(record, 'Usuário desbanido')] });
+    await interaction.editReply({ embeds: [recordEmbed(record, 'User unbanned')] });
   },
 };

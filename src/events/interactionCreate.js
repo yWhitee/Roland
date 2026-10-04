@@ -3,20 +3,32 @@ const permissions = require('../permissions');
 const { UserError } = require('../utils/errors');
 const { replyError } = require('../utils/interactions');
 
+const route = (interaction) => {
+  const { commands, components } = interaction.client;
+  if (interaction.isChatInputCommand()) {
+    const command = commands.get(interaction.commandName);
+    return command && { level: command.level, run: command.execute };
+  }
+
+  const prefix = interaction.customId.split(':')[0];
+  const command = commands.get(prefix);
+  if (command?.handleComponent) return { level: command.level, run: command.handleComponent };
+  const component = components.get(prefix);
+  return component && { level: component.level, run: component.execute };
+};
+
 module.exports = {
   name: Events.InteractionCreate,
   async execute(interaction) {
-    const isCommand = interaction.isChatInputCommand();
-    if (!isCommand && !interaction.isMessageComponent() && !interaction.isModalSubmit()) return;
+    if (!interaction.isChatInputCommand() && !interaction.isMessageComponent() && !interaction.isModalSubmit()) return;
 
-    const command = interaction.client.commands.get(isCommand ? interaction.commandName : interaction.customId.split(':')[0]);
-    const handler = isCommand ? command?.execute : command?.handleComponent;
+    const handler = route(interaction);
     if (!handler) return;
 
     try {
-      if (!interaction.inCachedGuild()) throw new UserError('Este comando só pode ser usado dentro de um servidor.');
-      permissions.assertCommand(interaction.member, command.level);
-      await handler(interaction);
+      if (!interaction.inCachedGuild()) throw new UserError('This can only be used inside a server.');
+      permissions.assertCommand(interaction.member, handler.level);
+      await handler.run(interaction);
     } catch (error) {
       await replyError(interaction, error);
     }

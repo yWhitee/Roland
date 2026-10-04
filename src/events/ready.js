@@ -5,7 +5,7 @@ module.exports = {
   name: Events.ClientReady,
   once: true,
   execute(client) {
-    console.log(`Conectado como ${client.user.tag}`);
+    console.log(`Logged in as ${client.user.tag}`);
     tempBans.start(client);
   },
 };

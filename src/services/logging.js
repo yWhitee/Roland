@@ -3,34 +3,36 @@ const guildSettings = require('../database/guildSettings');
 const { ACTIONS, Colors, recordEmbed } = require('../utils/embeds');
 const { UserError } = require('../utils/errors');
 
-const send = async (guild, record) => {
+const sendEmbed = async (guild, embed) => {
   const settings = guildSettings.get(guild.id);
   if (!settings?.logs_enabled) return;
 
   try {
     const channel = await guild.channels.fetch(settings.log_channel_id);
-    await channel.send({ embeds: [recordEmbed(record, `Moderação • ${ACTIONS[record.type].label}`)] });
+    await channel.send({ embeds: [embed] });
   } catch (error) {
-    console.error(`Falha ao enviar log no servidor ${guild.id}: ${error.message}`);
+    console.error(`Failed to send log in guild ${guild.id}: ${error.message}`);
   }
 };
+
+const send = (guild, record) => sendEmbed(guild, recordEmbed(record, `Moderation • ${ACTIONS[record.type].label}`));
 
 const enable = async (guild, channel, moderator) => {
   const embed = new EmbedBuilder()
     .setColor(Colors.info)
-    .setTitle('Logs de moderação ativadas')
-    .setDescription(`As ações de moderação serão registradas neste canal.\n**Ativado por:** <@${moderator.id}>`)
+    .setTitle('Logs enabled')
+    .setDescription(`Moderation and ticket events will be logged in this channel.\n**Enabled by:** <@${moderator.id}>`)
     .setTimestamp();
 
   await channel.send({ embeds: [embed] }).catch(() => {
-    throw new UserError('Não consegui enviar mensagens nesse canal. Verifique as permissões do bot.');
+    throw new UserError('I could not send messages in that channel. Check the bot permissions.');
   });
   guildSettings.enableLogs(guild.id, channel.id);
 };
 
 const disable = (guild) => {
-  if (!guildSettings.get(guild.id)?.logs_enabled) throw new UserError('As logs já estão desativadas.');
+  if (!guildSettings.get(guild.id)?.logs_enabled) throw new UserError('Logs are already disabled.');
   guildSettings.disableLogs(guild.id);
 };
 
-module.exports = { send, enable, disable };
+module.exports = { send, sendEmbed, enable, disable };

@@ -2,86 +2,102 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const load = require('../src/loader');
-const { ROLES, Level, getLevel, assertCommand, assertCanModerate } = require('../src/permissions');
+const permissions = require('../src/permissions');
 const { UserError } = require('../src/utils/errors');
+const { BOT_ID, makeMember } = require('./helpers/discord');
 
-const BOT_ID = '900000000000000000';
-let nextId = 100000000000000000n;
-
-const member = (...roles) => {
-  const id = String(nextId++);
-  return { id, user: { id }, client: { user: { id: BOT_ID } }, roles: { cache: new Map(roles.map((role) => [role, {}])) } };
-};
-const target = (m) => ({ user: m.user, member: m });
+const { ROLES, Level, getLevel, assertCommand, assertCanModerate } = permissions;
 
 const RANKS = {
-  none: [],
-  moderator: [ROLES.MODERATOR],
-  senior: [ROLES.SENIOR_MODERATOR],
-  admin: [ROLES.ADMINISTRATOR],
-  creator: [ROLES.CREATOR],
+  member: null,
+  support: ROLES.SUPPORT,
+  moderator: ROLES.MODERATOR,
+  senior: ROLES.SENIOR_MODERATOR,
+  admin: ROLES.ADMINISTRATOR,
+  owner: ROLES.CREATOR,
 };
+const ORDER = Object.keys(RANKS);
 
-test('nível de cada cargo, usando o maior cargo do membro', () => {
-  assert.equal(getLevel(member()), Level.NONE);
-  assert.equal(getLevel(member(ROLES.MODERATOR)), Level.MODERATOR);
-  assert.equal(getLevel(member(ROLES.SENIOR_MODERATOR)), Level.SENIOR_MODERATOR);
-  assert.equal(getLevel(member(ROLES.ADMINISTRATOR)), Level.ADMINISTRATOR);
-  assert.equal(getLevel(member(ROLES.CREATOR)), Level.CREATOR);
-  assert.equal(getLevel(member(ROLES.MODERATOR, ROLES.ADMINISTRATOR)), Level.ADMINISTRATOR);
+const target = (member) => ({ user: member.user, member });
+
+test('each role maps to its level and the highest role wins', () => {
+  assert.equal(getLevel(makeMember()), Level.NONE);
+  assert.equal(getLevel(makeMember(ROLES.SUPPORT)), Level.SUPPORT);
+  assert.equal(getLevel(makeMember(ROLES.MODERATOR)), Level.MODERATOR);
+  assert.equal(getLevel(makeMember(ROLES.SENIOR_MODERATOR)), Level.SENIOR_MODERATOR);
+  assert.equal(getLevel(makeMember(ROLES.ADMINISTRATOR)), Level.ADMINISTRATOR);
+  assert.equal(getLevel(makeMember(ROLES.CREATOR)), Level.CREATOR);
+  assert.equal(ROLES.SUPPORT, '1556115487757307996');
+
+  const both = makeMember(ROLES.SUPPORT);
+  both.roles.cache.set(ROLES.ADMINISTRATOR, {});
+  assert.equal(getLevel(both), Level.ADMINISTRATOR);
   assert.equal(getLevel(null), Level.NONE);
 });
 
-test('matriz de permissões por comando', () => {
+test('command permission matrix', () => {
   const commands = Object.fromEntries(load(path.join(__dirname, '..', 'src', 'commands')).map((command) => [command.data.name, command]));
   const allowed = {
-    ping: ['none', 'moderator', 'senior', 'admin', 'creator'],
-    mute: ['moderator', 'senior', 'admin', 'creator'],
-    clear: ['moderator', 'senior', 'admin', 'creator'],
-    warn: ['moderator', 'senior', 'admin', 'creator'],
-    modlog: ['moderator', 'senior', 'admin', 'creator'],
-    ban: ['senior', 'admin', 'creator'],
-    kick: ['senior', 'admin', 'creator'],
-    unban: ['senior', 'admin', 'creator'],
-    unmute: ['senior', 'admin', 'creator'],
-    embed: ['senior', 'admin', 'creator'],
-    logs: ['admin', 'creator'],
+    ping: ['member', 'support', 'moderator', 'senior', 'admin', 'owner'],
+    mute: ['moderator', 'senior', 'admin', 'owner'],
+    clear: ['moderator', 'senior', 'admin', 'owner'],
+    warn: ['moderator', 'senior', 'admin', 'owner'],
+    modlog: ['moderator', 'senior', 'admin', 'owner'],
+    ban: ['senior', 'admin', 'owner'],
+    kick: ['senior', 'admin', 'owner'],
+    unban: ['senior', 'admin', 'owner'],
+    unmute: ['senior', 'admin', 'owner'],
+    embed: ['senior', 'admin', 'owner'],
+    logs: ['admin', 'owner'],
+    ticketcreate: ['admin', 'owner'],
   };
 
   assert.deepEqual(Object.keys(commands).sort(), Object.keys(allowed).sort());
   for (const [name, ranks] of Object.entries(allowed)) {
-    for (const [rank, roles] of Object.entries(RANKS)) {
-      const run = () => assertCommand(member(...roles), commands[name].level);
-      if (ranks.includes(rank)) assert.doesNotThrow(run, `${rank} deveria usar /${name}`);
-      else assert.throws(run, UserError, `${rank} não deveria usar /${name}`);
+    for (const rank of ORDER) {
+      const run = () => assertCommand(makeMember(RANKS[rank]), commands[name].level);
+      if (ranks.includes(rank)) assert.doesNotThrow(run, `${rank} should be able to use /${name}`);
+      else assert.throws(run, UserError, `${rank} should not be able to use /${name}`);
     }
   }
 });
 
-test('Creator nunca pode ser afetado', () => {
-  for (const rank of Object.keys(RANKS)) {
-    assert.throws(() => assertCanModerate(member(...RANKS[rank]), target(member(ROLES.CREATOR))), /Creator/, rank);
+test('the Creator can never be targeted', () => {
+  for (const rank of ORDER) {
+    assert.throws(() => assertCanModerate(makeMember(RANKS[rank]), target(makeMember(ROLES.CREATOR))), /Creator/, rank);
   }
 });
 
-test('cargos não podem agir contra cargos iguais ou superiores', () => {
-  const order = ['none', 'moderator', 'senior', 'admin', 'creator'];
-  for (const [executorIndex, executor] of order.entries()) {
-    for (const [targetIndex, victim] of order.entries()) {
-      const run = () => assertCanModerate(member(...RANKS[executor]), target(member(...RANKS[victim])));
+test('nobody can moderate an equal or higher role', () => {
+  for (const [executorIndex, executor] of ORDER.entries()) {
+    for (const [targetIndex, victim] of ORDER.entries()) {
+      const run = () => assertCanModerate(makeMember(RANKS[executor]), target(makeMember(RANKS[victim])));
       if (targetIndex < executorIndex) assert.doesNotThrow(run, `${executor} -> ${victim}`);
       else assert.throws(run, UserError, `${executor} -> ${victim}`);
     }
   }
 });
 
-test('usuário fora do servidor é tratado como sem cargo', () => {
-  const executor = member(ROLES.MODERATOR);
-  assert.doesNotThrow(() => assertCanModerate(executor, { user: { id: '123456789012345678' }, member: null }));
+test('users outside the server count as having no role', () => {
+  assert.doesNotThrow(() => assertCanModerate(makeMember(ROLES.MODERATOR), { user: { id: '123456789012345678' }, member: null }));
 });
 
-test('não permite agir contra si mesmo nem contra o bot', () => {
-  const executor = member(ROLES.CREATOR);
+test('cannot target yourself or the bot', () => {
+  const executor = makeMember(ROLES.CREATOR);
   assert.throws(() => assertCanModerate(executor, target(executor)), UserError);
   assert.throws(() => assertCanModerate(executor, { user: { id: BOT_ID }, member: null }), UserError);
+});
+
+test('ticket staff, close and delete rules', () => {
+  const staff = ORDER.filter((rank) => permissions.isTicketStaff(makeMember(RANKS[rank])));
+  assert.deepEqual(staff, ['support', 'moderator', 'senior', 'admin', 'owner']);
+
+  const claimant = makeMember(ROLES.SUPPORT);
+  const ticket = { claimed_by: claimant.id };
+  const closers = ORDER.filter((rank) => permissions.canCloseTicket(makeMember(RANKS[rank]), ticket));
+  assert.deepEqual(closers, ['admin', 'owner']);
+  assert.ok(permissions.canCloseTicket(claimant, ticket));
+
+  const deleters = ORDER.filter((rank) => permissions.canDeleteTicket(makeMember(RANKS[rank])));
+  assert.deepEqual(deleters, ['admin', 'owner']);
 });
