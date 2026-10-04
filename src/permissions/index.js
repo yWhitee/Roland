@@ -48,6 +48,11 @@ const Automod = {
   ALERTED: Level.SUPPORT,
 };
 
+const Leveling = {
+  REWARDS: Level.CREATOR,
+  SET: Level.ADMINISTRATOR,
+};
+
 const isAutomodImmune = (member) => getLevel(member) >= Automod.IMMUNE;
 
 const isTicketStaff = (member) => getLevel(member) >= Tickets.STAFF;
@@ -61,6 +66,7 @@ module.exports = {
   Level,
   Tickets,
   Automod,
+  Leveling,
   getLevel,
   rolesAtLeast,
   assertCommand,

@@ -106,6 +106,7 @@ const makeGuild = ({ roles = [] } = {}) => {
     ownerId: snowflake(),
     client: {
       user: { id: BOT_ID },
+      users: { cache: new Map() },
       fetchInvite: async () => Promise.reject(apiError(10006)),
     },
     banned,

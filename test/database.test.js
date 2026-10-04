@@ -92,8 +92,24 @@ test('an existing version 4 database keeps pending OAuth states and gains the st
   db.close();
 
   database.open(legacy);
-  assert.equal(database.get().pragma('user_version', { simple: true }), 5);
+  assert.equal(database.get().pragma('user_version', { simple: true }), database.migrations.length);
   assert.equal(database.get().prepare("SELECT mode FROM oauth_states WHERE state_hash = 'hash'").get().mode, 'link');
+  database.open(file);
+});
+
+test('an existing version 5 database gains the level tables without touching other data', () => {
+  const legacy = tempDatabase();
+  const db = new Database(legacy);
+  database.migrations.slice(0, 5).forEach((sql) => db.exec(sql));
+  db.pragma('user_version = 5');
+  db.prepare("INSERT INTO punishments (type, guild_id, user_id, moderator_id, reason, created_at) VALUES ('warn', 'g', 'u', 'm', 'kept', 1)").run();
+  db.close();
+
+  database.open(legacy);
+  assert.equal(database.get().pragma('user_version', { simple: true }), 6);
+  assert.equal(punishments.listByUser('g', 'u', 1)[0].reason, 'kept');
+  const tables = database.get().prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name);
+  assert.ok(tables.includes('levels') && tables.includes('level_role_rewards'));
   database.open(file);
 });
 

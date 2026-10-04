@@ -57,6 +57,10 @@ test('command permission matrix', () => {
     automodwhitelist: ['admin', 'owner'],
     automodlist: ['moderator', 'senior', 'admin', 'owner'],
     verify: ['member', 'support', 'moderator', 'senior', 'admin', 'owner'],
+    level: ['member', 'support', 'moderator', 'senior', 'admin', 'owner'],
+    leaderboard: ['member', 'support', 'moderator', 'senior', 'admin', 'owner'],
+    levelset: ['admin', 'owner'],
+    levelsystem: ['owner'],
   };
 
   assert.deepEqual(Object.keys(commands).sort(), Object.keys(allowed).sort());

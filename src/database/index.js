@@ -146,6 +146,24 @@ const migrations = [
     UNIQUE (lockdown_id, target_id, permission)
   );`,
   `ALTER TABLE oauth_states ADD COLUMN mode TEXT NOT NULL DEFAULT 'link';`,
+  `CREATE TABLE levels (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    xp INTEGER NOT NULL DEFAULT 0 CHECK (xp >= 0),
+    messages INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (guild_id, user_id)
+  );
+  CREATE INDEX levels_leaderboard ON levels (guild_id, xp DESC);
+  CREATE TABLE level_role_rewards (
+    guild_id TEXT NOT NULL,
+    level INTEGER NOT NULL CHECK (level >= 1),
+    role_id TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (guild_id, level)
+  );`,
 ];
 
 let db;

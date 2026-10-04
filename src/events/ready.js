@@ -1,5 +1,6 @@
 const { Events } = require('discord.js');
 const automod = require('../services/automod');
+const levels = require('../services/levels');
 const tempBans = require('../services/tempBans');
 
 module.exports = {
@@ -9,5 +10,6 @@ module.exports = {
     console.log(`Logged in as ${client.user.tag}`);
     tempBans.start(client);
     automod.start(client);
+    levels.start();
   },
 };
