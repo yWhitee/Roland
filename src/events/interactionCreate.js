@@ -1,20 +1,24 @@
-const { Events, MessageFlags } = require('discord.js');
+const { Events } = require('discord.js');
+const permissions = require('../permissions');
+const { UserError } = require('../utils/errors');
+const { replyError } = require('../utils/interactions');
 
 module.exports = {
   name: Events.InteractionCreate,
   async execute(interaction) {
-    if (!interaction.isChatInputCommand()) return;
+    const isCommand = interaction.isChatInputCommand();
+    if (!isCommand && !interaction.isMessageComponent() && !interaction.isModalSubmit()) return;
 
-    const command = interaction.client.commands.get(interaction.commandName);
-    if (!command) return;
+    const command = interaction.client.commands.get(isCommand ? interaction.commandName : interaction.customId.split(':')[0]);
+    const handler = isCommand ? command?.execute : command?.handleComponent;
+    if (!handler) return;
 
     try {
-      await command.execute(interaction);
+      if (!interaction.inCachedGuild()) throw new UserError('Este comando só pode ser usado dentro de um servidor.');
+      permissions.assertCommand(interaction.member, command.level);
+      await handler(interaction);
     } catch (error) {
-      console.error(error);
-      const reply = { content: 'Erro ao executar o comando.', flags: MessageFlags.Ephemeral };
-      if (interaction.replied || interaction.deferred) await interaction.followUp(reply);
-      else await interaction.reply(reply);
+      await replyError(interaction, error);
     }
   },
 };

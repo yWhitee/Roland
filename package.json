@@ -6,16 +6,18 @@
   "scripts": {
     "start": "node src/index.js",
     "deploy": "node src/deploy-commands.js",
-    "dev": "node scripts/auto-updater.js"
+    "dev": "node scripts/auto-updater.js",
+    "test": "node --test"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/yWhitee/Roland.git"
   },
   "dependencies": {
+    "better-sqlite3": "^12.11.1",
     "discord.js": "^14.27.0",
     "dotenv": "^18.0.5"
   }
