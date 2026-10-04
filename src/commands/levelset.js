@@ -2,7 +2,7 @@ const { MessageFlags, SlashCommandBuilder } = require('discord.js');
 const { Leveling } = require('../permissions');
 const logging = require('../services/logging');
 const levels = require('../services/levels');
-const { levelSetEmbed, number } = require('../services/levels/messages');
+const { levelSetEmbed } = require('../services/levels/messages');
 const { successEmbed } = require('../utils/embeds');
 const { UserError } = require('../utils/errors');
 
@@ -12,7 +12,7 @@ module.exports = {
     .setName('levelset')
     .setDescription("Set a member's level")
     .addUserOption((option) => option.setName('user').setDescription('Member').setRequired(true))
-    .addIntegerOption((option) => option.setName('level').setDescription('New level (1 or more)').setRequired(true).setMinValue(1)),
+    .addIntegerOption((option) => option.setName('level').setDescription('New level (1-200)').setRequired(true).setMinValue(1).setMaxValue(levels.MAX_LEVEL)),
   async execute(interaction) {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const member = interaction.options.getMember('user');
@@ -21,9 +21,11 @@ module.exports = {
     const result = await levels.setLevel(interaction.guild, member, interaction.options.getInteger('level', true));
     await logging.sendEmbed(interaction.guild, levelSetEmbed(interaction.user, member, result.previous, result));
 
-    const lines = [`<@${member.id}> is now **level ${number(result.level)}** with **${number(result.xp)} XP**.`];
-    if (result.rewards.granted.length) lines.push(`Role rewards granted: ${result.rewards.granted.map((reward) => `<@&${reward.role_id}>`).join(', ')}`);
-    if (result.rewards.failed.length) lines.push(`⚠️ Could not grant: ${result.rewards.failed.map(({ reward, reason }) => `<@&${reward.role_id}> (${reason})`).join(', ')}`);
+    const { added, removed, failed } = result.rewards;
+    const lines = [`<@${member.id}> is now **level ${result.level}** with **${result.xp} XP**.`];
+    if (added) lines.push(`Level reward added: <@&${added}>`);
+    if (removed.length) lines.push(`Previous level reward removed: ${removed.map((roleId) => `<@&${roleId}>`).join(', ')}`);
+    if (failed.length) lines.push(`⚠️ Could not update: ${failed.map(({ roleId, reason }) => `<@&${roleId}> (${reason})`).join(', ')}`);
     await interaction.editReply({ embeds: [successEmbed(lines.join('\n'))] });
   },
 };

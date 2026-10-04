@@ -106,10 +106,27 @@ test('an existing version 5 database gains the level tables without touching oth
   db.close();
 
   database.open(legacy);
-  assert.equal(database.get().pragma('user_version', { simple: true }), 6);
+  assert.equal(database.get().pragma('user_version', { simple: true }), database.migrations.length);
   assert.equal(punishments.listByUser('g', 'u', 1)[0].reason, 'kept');
   const tables = database.get().prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name);
   assert.ok(tables.includes('levels') && tables.includes('level_role_rewards'));
+  database.open(file);
+});
+
+test('an existing version 6 database caps stored XP at the level 200 limit', () => {
+  const legacy = tempDatabase();
+  const db = new Database(legacy);
+  database.migrations.slice(0, 6).forEach((sql) => db.exec(sql));
+  db.pragma('user_version = 6');
+  const insert = db.prepare('INSERT INTO levels (guild_id, user_id, xp, messages, created_at, updated_at) VALUES (?, ?, ?, 0, 1, 1)');
+  insert.run('g', 'huge', 500_000_000);
+  insert.run('g', 'normal', 1234);
+  db.close();
+
+  database.open(legacy);
+  assert.equal(database.get().pragma('user_version', { simple: true }), 7);
+  const xp = Object.fromEntries(database.get().prepare('SELECT user_id, xp FROM levels').all().map((row) => [row.user_id, row.xp]));
+  assert.deepEqual(xp, { huge: 19_999, normal: 1234 });
   database.open(file);
 });
 

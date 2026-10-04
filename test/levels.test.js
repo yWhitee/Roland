@@ -15,6 +15,7 @@ const leaderboardCommand = require('../src/commands/leaderboard');
 const levelsetCommand = require('../src/commands/levelset');
 const levelsystemCommand = require('../src/commands/levelsystem');
 const { ROLES } = require('../src/permissions');
+const { MEMBER_ROLE } = require('../src/services/verification');
 const { apiError, makeGuild, makeMember, snowflake, tempDatabase } = require('./helpers/discord');
 
 const file = tempDatabase();
@@ -25,7 +26,7 @@ test.before(() => database.open(file));
 test.after(() => database.close());
 
 const setup = () => {
-  const guild = makeGuild({ roles: Object.values(ROLES) });
+  const guild = makeGuild({ roles: [...Object.values(ROLES), MEMBER_ROLE] });
   guildSettings.enableLogs(guild.id, guild.logChannel.id);
   return guild;
 };
@@ -36,16 +37,30 @@ const addRole = (guild, options = {}) => {
   return role;
 };
 
-const join = (guild, role = null) => {
-  const member = makeMember(role);
-  member.adds = [];
-  const add = member.roles.add;
+const join = (guild, ...roles) => {
+  const member = makeMember(roles[0] ?? null);
+  for (const role of roles.slice(1)) member.roles.cache.set(role, {});
+  member.changes = [];
+  const { add, remove } = member.roles;
   member.roles.add = async (roleId) => {
-    member.adds.push(roleId);
+    member.changes.push(`+${roleId}`);
     return add(roleId);
+  };
+  member.roles.remove = async (roleId) => {
+    member.changes.push(`-${roleId}`);
+    return remove(roleId);
   };
   guild.members.cache.set(member.id, member);
   return member;
+};
+
+const rewardRoles = (guild) => {
+  const roles = {};
+  for (const [name, level] of [['novato', 5], ['veterano', 10], ['elite', 20]]) {
+    roles[name] = addRole(guild);
+    levelRewards.set(guild.id, level, roles[name].id, 'owner');
+  }
+  return roles;
 };
 
 const message = (guild, channel, member, { at = T0, type = MessageType.Default, bot = false, content = 'hello there' } = {}) => ({
@@ -67,6 +82,7 @@ const message = (guild, channel, member, { at = T0, type = MessageType.Default, 
 
 const chat = (guild, channel, member, options) => levels.handleMessage(message(guild, channel, member, options));
 const xpOf = (guild, member) => levelStore.get(guild.id, member.id)?.xp ?? 0;
+const rewardsOf = (member, roles) => Object.entries(roles).filter(([, role]) => member.roles.cache.has(role.id)).map(([name]) => name);
 
 const reply = async (command, interaction) => {
   const replies = [];
@@ -78,14 +94,20 @@ const reply = async (command, interaction) => {
   return replies[0];
 };
 
+const levelset = (guild, actor, target, level) =>
+  reply(levelsetCommand, { guild, user: actor.user, options: { getMember: () => target, getInteger: () => level } });
+
+const levelsystem = (guild, actor, role, level) =>
+  reply(levelsystemCommand, { guild, user: actor.user, options: { getRole: () => role, getInteger: () => level } });
+
 const fields = (embed) => Object.fromEntries(embed.fields.map((field) => [field.name, field.value]));
 
-test('level = floor(xp / 100) with 0-99 XP as level 0 and no level cap', () => {
-  const cases = [[0, 0], [2, 0], [99, 0], [100, 1], [199, 1], [200, 2], [999, 9], [1000, 10], [123_456, 1234]];
+test('level = min(200, floor(xp / 100) + 1): level 1 starts at 0 XP', () => {
+  const cases = [[0, 1], [2, 1], [99, 1], [100, 2], [199, 2], [200, 3], [900, 10], [1000, 11], [19_899, 199], [19_900, 200], [19_999, 200], [1_000_000, 200]];
   for (const [xp, level] of cases) assert.equal(levels.levelFor(xp), level, `${xp} XP`);
-  assert.equal(levels.xpFor(1), 100);
-  assert.equal(levels.xpFor(10), 1000);
-  assert.equal(levels.levelFor(levels.xpFor(5_000_000)), 5_000_000);
+  assert.deepEqual([1, 2, 10, 50, 200].map(levels.xpFor), [0, 100, 900, 4900, 19_900]);
+  assert.equal(levels.MAX_LEVEL, 200);
+  assert.equal(levels.MAX_XP, 19_999);
 });
 
 test('each normal message gives 2 XP', async () => {
@@ -94,7 +116,7 @@ test('each normal message gives 2 XP', async () => {
   const member = join(guild);
 
   const first = await chat(guild, channel, member, { at: T0 });
-  assert.deepEqual([first.gained, first.xp, first.level], [2, 2, 0]);
+  assert.deepEqual([first.gained, first.xp, first.level], [2, 2, 1]);
   for (let index = 1; index < 10; index++) await chat(guild, channel, member, { at: T0 + index * 1000 });
   assert.equal(xpOf(guild, member), 20);
   assert.equal(levelStore.get(guild.id, member.id).messages, 10);
@@ -172,8 +194,7 @@ test('100 messages in a rolling 60 minutes doubles XP and notifies only on cross
   assert.equal(channel.sent.length, 0, 'nothing is posted publicly');
 
   const above = await send(T0 + 50 * MINUTE);
-  assert.deepEqual([above.gained, above.notified], [4, false], 'no repeated notification while above 100');
-  assert.equal(levels.profile(guild.id, member.id, T0 + 50 * MINUTE).boosted, true);
+  assert.deepEqual([above.gained, above.boosted, above.notified], [4, true, false], 'no repeated notification while above 100');
 
   const dropped = await send(T0 + 70 * MINUTE);
   assert.deepEqual([dropped.gained, dropped.boosted, dropped.notified], [2, false, false], 'older messages left the window');
@@ -187,38 +208,180 @@ test('100 messages in a rolling 60 minutes doubles XP and notifies only on cross
   assert.equal(xpOf(guild, member), 208 + 18 * 2 + 4 + 4);
 });
 
-test('reaching a configured level grants its role once', async () => {
+test('level 200 is the maximum: XP stops growing and never exceeds 19999', async () => {
   const guild = setup();
   const channel = await guild.channels.create({ name: 'general' });
-  const role = addRole(guild);
-  levelRewards.set(guild.id, 1, role.id, 'owner');
+  const roles = rewardRoles(guild);
+  const top = addRole(guild);
+  levelRewards.set(guild.id, 200, top.id, 'owner');
   const member = join(guild);
-  levelStore.setXp(guild.id, member.id, 98);
+  await levels.setLevel(guild, member, 199);
+  levelStore.setXp(guild.id, member.id, 19_898);
 
-  const levelUp = await chat(guild, channel, member);
-  assert.deepEqual([levelUp.previousLevel, levelUp.level], [0, 1]);
-  assert.deepEqual(member.adds, [role.id]);
+  const reached = await chat(guild, channel, member, { at: T0 });
+  assert.deepEqual([reached.previousLevel, reached.level, reached.xp], [199, 200, 19_900]);
+  assert.ok(member.roles.cache.has(top.id), 'the level 200 reward is granted');
+  assert.deepEqual(rewardsOf(member, roles), [], 'the previous reward is removed');
 
-  await chat(guild, channel, member, { at: T0 + 1 });
-  assert.deepEqual(member.adds, [role.id], 'no level change, no role call');
+  const after = await chat(guild, channel, member, { at: T0 + 1000 });
+  assert.deepEqual([after.gained, after.xp, after.level], [0, 19_900, 200], 'messages after level 200 add no XP');
 
-  const holder = join(guild, role.id);
-  levelStore.setXp(guild.id, holder.id, 98);
-  await chat(guild, channel, holder);
-  assert.deepEqual(holder.adds, [], 'members who already have the role are left alone');
+  for (let index = 0; index < 120; index++) await chat(guild, channel, member, { at: T0 + 2000 + index });
+  assert.equal(xpOf(guild, member), 19_900, 'not even with the 2x multiplier');
+  assert.equal(member.state.dms.length, 0, 'no 2x notice when no XP can be earned');
+
+  const boosted = join(guild);
+  levelStore.setXp(guild.id, boosted.id, 19_898);
+  for (let index = 0; index < 99; index++) await chat(guild, channel, join(guild), { at: T0 + index });
+  levelStore.setXp(guild.id, boosted.id, 19_899);
+  assert.equal(levels.levelFor(xpOf(guild, boosted)), 199);
+  assert.equal((await chat(guild, channel, boosted, { at: T0 + 5000 })).xp, 19_901, 'the message reaching level 200 still counts');
+
+  assert.equal(levelStore.addXp(guild.id, join(guild).id, 50_000).xp, 19_999, 'XP is clamped to 19999');
+  assert.equal(levelStore.setXp(guild.id, join(guild).id, 25_000).xp, 19_999);
+  assert.equal(levels.levelFor(19_999), 200);
 });
 
-test('a role that cannot be assigned is logged and levels keep working', async () => {
+test('/levelset uses (level - 1) x 100 XP and accepts levels 1 to 200 only', async () => {
+  const guild = setup();
+  const otherGuild = setup();
+  const admin = join(guild, ROLES.ADMINISTRATOR);
+  const member = join(guild);
+  levelStore.setXp(otherGuild.id, member.id, 555);
+
+  for (const [level, xp] of [[1, 0], [2, 100], [10, 900], [50, 4900], [200, 19_900]]) {
+    const result = await levelset(guild, admin, member, level);
+    assert.equal(xpOf(guild, member), xp, `level ${level}`);
+    assert.equal(levels.profile(guild.id, member.id).level, level);
+    assert.match(result.description, new RegExp(`level ${level}\\*\\* with \\*\\*${xp} XP`));
+  }
+  assert.equal(levelStore.get(otherGuild.id, member.id).xp, 555, 'other servers are untouched');
+
+  await assert.rejects(levelset(guild, admin, member, 0), /from 1 to 200/);
+  await assert.rejects(levelset(guild, admin, member, 201), /from 1 to 200/);
+  await assert.rejects(levelset(guild, admin, member, 2.5), /whole number/);
+  await assert.rejects(levelset(guild, admin, null, 10), /not a member of this server/);
+  const bot = join(guild);
+  bot.user.bot = true;
+  await assert.rejects(levelset(guild, admin, bot, 10), /Bots cannot have levels/);
+
+  const log = guild.logChannel.sent.at(-1).embeds[0].toJSON();
+  assert.equal(log.title, 'Levels • Level set');
+  assert.equal(fields(log).Level, '50 → 200');
+});
+
+test('level rewards: only the reward of the highest reached level is kept', async () => {
+  const guild = setup();
+  const channel = await guild.channels.create({ name: 'general' });
+  const roles = rewardRoles(guild);
+  const member = join(guild, MEMBER_ROLE, ROLES.SUPPORT);
+  const unrelated = addRole(guild);
+  member.roles.cache.set(unrelated.id, {});
+
+  levelStore.setXp(guild.id, member.id, 398);
+  assert.equal((await chat(guild, channel, member, { at: T0 })).level, 5);
+  assert.deepEqual(rewardsOf(member, roles), ['novato']);
+
+  levelStore.setXp(guild.id, member.id, 898);
+  assert.equal((await chat(guild, channel, member, { at: T0 + 1 })).level, 10);
+  assert.deepEqual(rewardsOf(member, roles), ['veterano'], 'level 10 swaps Novato for Veterano');
+
+  levelStore.setXp(guild.id, member.id, 1398);
+  await chat(guild, channel, member, { at: T0 + 2 });
+  assert.deepEqual(rewardsOf(member, roles), ['veterano'], 'a level without a reward keeps the last valid reward');
+
+  levelStore.setXp(guild.id, member.id, 1898);
+  assert.equal((await chat(guild, channel, member, { at: T0 + 3 })).level, 20);
+  assert.deepEqual(rewardsOf(member, roles), ['elite'], 'level 20 swaps Veterano for Elite');
+
+  for (const role of [MEMBER_ROLE, ROLES.SUPPORT, unrelated.id]) assert.ok(member.roles.cache.has(role), `${role} is never removed`);
+
+  const changes = member.changes.length;
+  await chat(guild, channel, member, { at: T0 + 4 });
+  assert.equal(member.changes.length, changes, 'no role changes without a level change');
+});
+
+test('/levelset applies the same single-reward rule', async () => {
+  const guild = setup();
+  const roles = rewardRoles(guild);
+  const admin = join(guild, ROLES.ADMINISTRATOR);
+  const member = join(guild, ROLES.MODERATOR);
+
+  await levelset(guild, admin, member, 5);
+  assert.deepEqual(rewardsOf(member, roles), ['novato']);
+
+  const jump = await levelset(guild, admin, member, 20);
+  assert.deepEqual(rewardsOf(member, roles), ['elite']);
+  assert.match(jump.description, new RegExp(`Level reward added: <@&${roles.elite.id}>`));
+  assert.match(jump.description, new RegExp(`Previous level reward removed: <@&${roles.novato.id}>`));
+
+  await levelset(guild, admin, member, 15);
+  assert.deepEqual(rewardsOf(member, roles), ['veterano'], 'level 15 keeps the reward of level 10');
+
+  await levelset(guild, admin, member, 3);
+  assert.deepEqual(rewardsOf(member, roles), [], 'below every reward level no reward remains');
+  assert.ok(member.roles.cache.has(ROLES.MODERATOR), 'staff roles are untouched');
+
+  member.roles.cache.set(roles.novato.id, {});
+  member.roles.cache.set(roles.elite.id, {});
+  await levelset(guild, admin, member, 12);
+  assert.deepEqual(rewardsOf(member, roles), ['veterano'], 'extra reward roles are cleaned up');
+});
+
+test('/levelsystem validates the reward and applies it retroactively', async () => {
+  const guild = setup();
+  const owner = join(guild, ROLES.CREATOR);
+  const novato = addRole(guild);
+  const veterano = addRole(guild);
+  const elite = addRole(guild);
+
+  const low = join(guild);
+  const mid = join(guild);
+  const high = join(guild, ROLES.SENIOR_MODERATOR);
+  levelStore.setXp(guild.id, low.id, 100);
+  levelStore.setXp(guild.id, mid.id, 1400);
+  levelStore.setXp(guild.id, high.id, 2500);
+  const roles = { novato, veterano, elite };
+
+  const first = await levelsystem(guild, owner, novato, 5);
+  assert.match(first.description, /Updated 2 member\(s\) already at level 5 or above/);
+  assert.deepEqual([rewardsOf(low, roles), rewardsOf(mid, roles), rewardsOf(high, roles)], [[], ['novato'], ['novato']]);
+
+  await levelsystem(guild, owner, veterano, 10);
+  assert.deepEqual([rewardsOf(mid, roles), rewardsOf(high, roles)], [['veterano'], ['veterano']], 'level 15 and 26 keep only Veterano');
+
+  await levelsystem(guild, owner, elite, 20);
+  assert.deepEqual([rewardsOf(mid, roles), rewardsOf(high, roles)], [['veterano'], ['elite']]);
+  assert.ok(high.roles.cache.has(ROLES.SENIOR_MODERATOR));
+  assert.equal(levelRewards.get(guild.id, 20).role_id, elite.id);
+
+  const replaced = addRole(guild);
+  assert.match((await levelsystem(guild, owner, replaced, 20)).description, new RegExp(`replaces the previous reward for that level \\(<@&${elite.id}>\\)`));
+  assert.deepEqual(rewardsOf(high, { ...roles, replaced }), ['replaced'], 'a replaced reward is swapped for the new one');
+  assert.ok(!high.roles.cache.has(elite.id), 'the replaced reward role is removed');
+
+  await levelsystem(guild, owner, addRole(guild), 200);
+  await assert.rejects(levelsystem(guild, owner, novato, 0), /from 1 to 200/);
+  await assert.rejects(levelsystem(guild, owner, novato, 201), /from 1 to 200/);
+  await assert.rejects(levelsystem(guild, owner, addRole(guild, { id: guild.id }), 1), /@everyone/);
+  for (const protectedRole of [ROLES.SUPPORT, ROLES.ADMINISTRATOR, MEMBER_ROLE]) {
+    await assert.rejects(levelsystem(guild, owner, addRole(guild, { id: protectedRole }), 3), /Staff roles and the Member role/);
+  }
+  await assert.rejects(levelsystem(guild, owner, addRole(guild, { managed: true }), 1), /managed by an integration/);
+  await assert.rejects(levelsystem(guild, owner, addRole(guild, { editable: false }), 1), /Roland cannot manage this role/);
+});
+
+test('a role that cannot be changed is logged and levels keep working', async () => {
   const guild = setup();
   const channel = await guild.channels.create({ name: 'general' });
   const role = addRole(guild);
-  levelRewards.set(guild.id, 1, role.id, 'owner');
+  levelRewards.set(guild.id, 2, role.id, 'owner');
   const member = join(guild);
   member.roles.add = async () => Promise.reject(apiError(50013, 403));
   levelStore.setXp(guild.id, member.id, 98);
 
   const result = await chat(guild, channel, member);
-  assert.equal(result.level, 1);
+  assert.equal(result.level, 2);
   assert.equal(result.rewards.failed.length, 1);
   assert.equal(xpOf(guild, member), 100);
   const log = guild.logChannel.sent.at(-1).embeds[0].toJSON();
@@ -226,144 +389,60 @@ test('a role that cannot be assigned is logged and levels keep working', async (
   assert.match(log.fields[1].value, /cannot manage this role/);
 });
 
-test('/levelsystem configures one role per level with validation', async () => {
+test('/level shows only the user, level and XP', async () => {
   const guild = setup();
-  const owner = join(guild, ROLES.CREATOR);
-  const novice = addRole(guild);
-  const veteran = addRole(guild);
-  const run = (role, level) =>
-    reply(levelsystemCommand, {
-      guild,
-      user: owner.user,
-      options: { getRole: () => role, getInteger: () => level },
-    });
-
-  assert.match((await run(novice, 5)).description, new RegExp(`level 5\\*\\* will receive <@&${novice.id}>`));
-  assert.equal(levelRewards.get(guild.id, 5).role_id, novice.id);
-
-  assert.match((await run(veteran, 5)).description, new RegExp(`replaces the previous reward for that level \\(<@&${novice.id}>\\)`));
-  assert.equal(levelRewards.get(guild.id, 5).role_id, veteran.id, 'one role per level');
-
-  assert.match((await run(veteran, 50)).description, /is also the reward for level 5/);
-  assert.equal(levelRewards.get(guild.id, 1_000_000), undefined);
-  await run(novice, 1_000_000);
-  assert.equal(levelRewards.get(guild.id, 1_000_000).role_id, novice.id, 'no level limit');
-
-  await assert.rejects(run(addRole(guild, { id: guild.id }), 1), /@everyone/);
-  await assert.rejects(run(addRole(guild, { managed: true }), 1), /managed by an integration/);
-  await assert.rejects(run(addRole(guild, { editable: false }), 1), /Roland cannot manage this role/);
-  assert.throws(() => levels.setReward(guild, novice, 0, owner.id), /1 or more/);
-  assert.throws(() => levels.setReward(guild, novice, 2.5, owner.id), /whole number/);
-});
-
-test('/levelset sets the exact start XP and grants every reward up to that level', async () => {
-  const guild = setup();
-  const otherGuild = setup();
-  const admin = join(guild, ROLES.ADMINISTRATOR);
-  const rewards = [5, 10, 20].map((level) => {
-    const role = addRole(guild);
-    levelRewards.set(guild.id, level, role.id, 'owner');
-    return role;
-  });
-  const member = join(guild);
-  levelStore.setXp(otherGuild.id, member.id, 555);
-
-  const run = (target, level) =>
-    reply(levelsetCommand, {
-      guild,
-      user: admin.user,
-      options: { getMember: () => target, getInteger: () => level },
-    });
-
-  const ten = await run(member, 10);
-  assert.match(ten.description, /is now \*\*level 10\*\* with \*\*1,000 XP\*\*/);
-  assert.equal(xpOf(guild, member), 1000);
-  assert.deepEqual(member.adds, [rewards[0].id, rewards[1].id]);
-
-  await run(member, 20);
-  assert.equal(xpOf(guild, member), 2000);
-  assert.deepEqual(member.adds, rewards.map((role) => role.id), 'all rewards up to level 20, each once');
-
-  await run(member, 3);
-  assert.equal(xpOf(guild, member), 300);
-  assert.ok(rewards.every((role) => member.roles.cache.has(role.id)), 'rewards are never removed');
-  assert.equal(levelStore.get(otherGuild.id, member.id).xp, 555, 'other servers are untouched');
-
-  const log = guild.logChannel.sent.at(-1).embeds[0].toJSON();
-  assert.equal(log.title, 'Levels • Level set');
-  assert.equal(fields(log).Level, '20 → 3');
-
-  await run(member, 5_000_000);
-  assert.equal(levels.profile(guild.id, member.id).level, 5_000_000);
-
-  await assert.rejects(run(null, 10), /not a member of this server/);
-  const bot = join(guild);
-  bot.user.bot = true;
-  await assert.rejects(run(bot, 10), /Bots cannot have levels/);
-  await assert.rejects(levels.setLevel(guild, member, 0), /1 or more/);
-});
-
-test('/level shows level, XP, next level and progress, including at 0 XP', async () => {
-  const guild = setup();
-  const channel = await guild.channels.create({ name: 'general' });
-  const fresh = join(guild);
   const view = (member) => reply(levelCommand, { guild, guildId: guild.id, member, user: member.user });
 
-  const zero = fields(await view(fresh));
-  assert.deepEqual([zero.User, zero.Level, zero.XP], [`<@${fresh.id}>`, '0', '0']);
-  assert.equal(zero['Next level'], 'Level 1 at 100 XP (100 XP to go)');
-  assert.equal(zero.Progress, '░░░░░░░░░░ 0%\n0 / 100 XP');
+  const fresh = join(guild);
+  const zero = await view(fresh);
+  assert.deepEqual(zero.fields.map((field) => field.name), ['User', 'Level', 'XP']);
+  assert.deepEqual(Object.values(fields(zero)), [`<@${fresh.id}>`, '1', '0']);
+  assert.equal(zero.thumbnail, undefined);
 
   const active = join(guild);
-  levelStore.setXp(guild.id, active.id, 250);
-  const halfway = fields(await view(active));
-  assert.deepEqual([halfway.Level, halfway.XP], ['2', '250']);
-  assert.equal(halfway['Next level'], 'Level 3 at 300 XP (50 XP to go)');
-  assert.equal(halfway.Progress, '█████░░░░░ 50%\n50 / 100 XP');
-
-  const now = Date.now();
-  for (let index = 0; index < 100; index++) await chat(guild, channel, active, { at: now - index * 1000 });
-  assert.match(fields(await view(active)).Activity, /2x XP active/);
+  levelStore.setXp(guild.id, active.id, 1137);
+  assert.deepEqual(Object.values(fields(await view(active))), [`<@${active.id}>`, '12', '1137']);
 });
 
-test('/level grants rewards configured after the member reached the level', async () => {
+test('/leaderboard shows only the top 10 current members by XP', async () => {
   const guild = setup();
-  const member = join(guild);
-  levelStore.setXp(guild.id, member.id, 700);
-  const role = addRole(guild);
-  levelRewards.set(guild.id, 5, role.id, 'owner');
+  const add = (id, xp, { bot = false, member = true } = {}) => {
+    levelStore.setXp(guild.id, id, xp);
+    if (member) guild.members.cache.set(id, { id, user: { id, bot } });
+  };
 
-  await reply(levelCommand, { guild, guildId: guild.id, member, user: member.user });
-  assert.deepEqual(member.adds, [role.id]);
-});
-
-test('/leaderboard shows the top 10 by XP with deterministic ties and no bots', async () => {
-  const guild = setup();
-  const ids = ['300000000000000000', '100000000000000000', '200000000000000000', '99999999999999999'];
-  for (const id of ids) levelStore.setXp(guild.id, id, 500);
-  for (let index = 0; index < 8; index++) levelStore.setXp(guild.id, `40000000000000000${index}`, 100 + index * 10);
-  levelStore.setXp(guild.id, '500000000000000000', 99_999);
-  guild.client.users.cache.set('500000000000000000', { id: '500000000000000000', bot: true });
-  levelStore.setXp(guild.id, '600000000000000000', 0);
+  for (const id of ['300000000000000000', '100000000000000000', '200000000000000000', '99999999999999999']) add(id, 500);
+  for (let index = 0; index < 8; index++) add(`40000000000000000${index}`, 100 + index * 10);
+  add('500000000000000000', 19_999, { bot: true });
+  add('510000000000000000', 19_000, { member: false });
+  add('600000000000000000', 0);
 
   const board = await reply(leaderboardCommand, { guild });
   const lines = board.description.split('\n');
   assert.equal(lines.length, 10);
   assert.ok(!board.description.includes('500000000000000000'), 'bots are excluded');
-  assert.ok(!board.description.includes('600000000000000000'), 'users without XP are excluded');
+  assert.ok(!board.description.includes('510000000000000000'), 'members who left are excluded');
+  assert.ok(!board.description.includes('600000000000000000'), 'users with 0 XP are excluded');
   assert.deepEqual(
     lines.slice(0, 4).map((line) => line.match(/<@(\d+)>/)[1]),
     ['99999999999999999', '100000000000000000', '200000000000000000', '300000000000000000'],
     'ties are ordered by user ID',
   );
-  assert.equal(lines[0], '**1.** <@99999999999999999> — Level 5 • 500 XP');
-  assert.equal(lines[4], '**5.** <@400000000000000007> — Level 1 • 170 XP');
+  assert.equal(lines[0], '#1 <@99999999999999999> — Level 6 — 500 XP');
+  assert.equal(lines[4], '#5 <@400000000000000007> — Level 2 — 170 XP');
+  assert.equal(lines[9], '#10 <@400000000000000002> — Level 2 — 120 XP');
 
   const small = setup();
-  levelStore.setXp(small.id, '700000000000000000', 1234);
-  levelStore.setXp(small.id, '800000000000000000', 50);
+  for (const [id, xp] of [['700000000000000000', 19_900], ['710000000000000000', 1234], ['720000000000000000', 50]]) {
+    levelStore.setXp(small.id, id, xp);
+    small.members.cache.set(id, { id, user: { id, bot: false } });
+  }
   const few = (await reply(leaderboardCommand, { guild: small })).description.split('\n');
-  assert.deepEqual(few, ['**1.** <@700000000000000000> — Level 12 • 1,234 XP', '**2.** <@800000000000000000> — Level 0 • 50 XP']);
+  assert.deepEqual(few, [
+    '#1 <@700000000000000000> — Level 200 — 19900 XP',
+    '#2 <@710000000000000000> — Level 13 — 1234 XP',
+    '#3 <@720000000000000000> — Level 1 — 50 XP',
+  ]);
 
   assert.equal((await reply(leaderboardCommand, { guild: setup() })).description, 'Nobody has earned XP yet.');
 });
@@ -383,4 +462,5 @@ test('XP and level rewards survive a restart', async () => {
   assert.equal(levelRewards.get(guild.id, 3).role_id, role.id);
   await chat(guild, channel, member, { at: T0 + 10 });
   assert.equal(xpOf(guild, member), 12);
+  assert.equal(levels.profile(guild.id, member.id).level, 1);
 });

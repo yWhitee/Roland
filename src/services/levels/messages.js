@@ -1,41 +1,23 @@
 const { EmbedBuilder } = require('discord.js');
 const { Colors } = require('../../utils/embeds');
 
-const BAR_SIZE = 10;
-
-const number = (value) => value.toLocaleString('en-US');
-
-const bar = (current, total) => {
-  const filled = Math.min(BAR_SIZE, Math.floor((current / total) * BAR_SIZE));
-  return `${'█'.repeat(filled)}${'░'.repeat(BAR_SIZE - filled)} ${Math.floor((current / total) * 100)}%`;
-};
-
 const profileEmbed = (user, profile) =>
   new EmbedBuilder()
     .setColor(Colors.info)
     .setTitle('Level')
-    .setThumbnail(user.displayAvatarURL?.() ?? null)
     .addFields(
       { name: 'User', value: `<@${user.id}>`, inline: true },
-      { name: 'Level', value: number(profile.level), inline: true },
-      { name: 'XP', value: number(profile.xp), inline: true },
-      { name: 'Next level', value: `Level ${number(profile.level + 1)} at ${number(profile.nextLevelXp)} XP (${number(profile.remaining)} XP to go)` },
-      { name: 'Progress', value: `${bar(profile.current, profile.perLevel)}\n${number(profile.current)} / ${number(profile.perLevel)} XP` },
-      {
-        name: 'Activity',
-        value: profile.boosted
-          ? `🔥 2x XP active: ${profile.recent} messages in the last 60 minutes (4 XP per message)`
-          : `${profile.recent} / ${profile.threshold} messages in the last 60 minutes (2x XP at ${profile.threshold})`,
-      },
+      { name: 'Level', value: String(profile.level), inline: true },
+      { name: 'XP', value: String(profile.xp), inline: true },
     );
 
-const leaderboardEmbed = (rows, levelFor) =>
+const leaderboardEmbed = (entries) =>
   new EmbedBuilder()
     .setColor(Colors.info)
     .setTitle('Leaderboard')
     .setDescription(
-      rows.length
-        ? rows.map((row, index) => `**${index + 1}.** <@${row.user_id}> — Level ${number(levelFor(row.xp))} • ${number(row.xp)} XP`).join('\n')
+      entries.length
+        ? entries.map((entry, index) => `#${index + 1} <@${entry.user_id}> — Level ${entry.level} — ${entry.xp} XP`).join('\n')
         : 'Nobody has earned XP yet.',
     );
 
@@ -57,7 +39,10 @@ const rewardFailureEmbed = (member, failures) =>
     .setTitle('Levels • Role reward failed')
     .addFields(
       { name: 'User', value: `<@${member.id}> (\`${member.id}\`)` },
-      { name: 'Failed rewards', value: failures.map(({ reward, reason }) => `Level ${reward.level} → <@&${reward.role_id}>: ${reason}`).join('\n').slice(0, 1024) },
+      {
+        name: 'Failed changes',
+        value: failures.map(({ roleId, action, reason }) => `${action === 'add' ? 'Add' : 'Remove'} <@&${roleId}>: ${reason}`).join('\n').slice(0, 1024),
+      },
     )
     .setTimestamp();
 
@@ -68,9 +53,9 @@ const levelSetEmbed = (actor, member, previous, result) =>
     .addFields(
       { name: 'User', value: `<@${member.id}> (\`${member.id}\`)` },
       { name: 'Staff', value: `<@${actor.id}>`, inline: true },
-      { name: 'Level', value: `${number(previous.level)} → ${number(result.level)}`, inline: true },
-      { name: 'XP', value: `${number(previous.xp)} → ${number(result.xp)}`, inline: true },
+      { name: 'Level', value: `${previous.level} → ${result.level}`, inline: true },
+      { name: 'XP', value: `${previous.xp} → ${result.xp}`, inline: true },
     )
     .setTimestamp();
 
-module.exports = { number, bar, profileEmbed, leaderboardEmbed, boostNotice, rewardFailureEmbed, levelSetEmbed };
+module.exports = { profileEmbed, leaderboardEmbed, boostNotice, rewardFailureEmbed, levelSetEmbed };

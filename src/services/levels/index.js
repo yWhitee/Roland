@@ -1,29 +1,34 @@
 const { MessageType, RESTJSONErrorCodes } = require('discord.js');
 const levelRewards = require('../../database/levelRewards');
 const levels = require('../../database/levels');
+const { ROLES } = require('../../permissions');
 const logging = require('../logging');
+const { MEMBER_ROLE } = require('../verification');
 const { UserError } = require('../../utils/errors');
 const messages = require('./messages');
 
 const XP_PER_LEVEL = 100;
 const XP_PER_MESSAGE = 2;
+const MAX_LEVEL = 200;
+const MAX_XP = levels.MAX_XP;
 const MULTIPLIER = 2;
 const ACTIVITY_THRESHOLD = 100;
 const ACTIVITY_WINDOW = 60 * 60_000;
 const SWEEP_INTERVAL = 5 * 60_000;
+const LEADERBOARD_SIZE = 10;
 const NORMAL_TYPES = new Set([MessageType.Default, MessageType.Reply]);
+const PROTECTED_ROLES = new Set([...Object.values(ROLES), MEMBER_ROLE]);
 
 const activity = new Map();
 const processed = new Map();
 
-// Level 0 covers 0-99 XP; every following level needs another 100 XP, so level = floor(xp / 100).
-const levelFor = (xp) => Math.floor(xp / XP_PER_LEVEL);
+// Level 1 starts at 0 XP and every level needs 100 XP: 0-99 XP is level 1, 100-199 XP is level 2, capped at level 200.
+const levelFor = (xp) => Math.min(MAX_LEVEL, Math.floor(xp / XP_PER_LEVEL) + 1);
 
-const xpFor = (level) => level * XP_PER_LEVEL;
+const xpFor = (level) => (level - 1) * XP_PER_LEVEL;
 
 const validateLevel = (level) => {
-  if (!Number.isSafeInteger(level) || level < 1) throw new UserError('The level must be a whole number of 1 or more.');
-  if (!Number.isSafeInteger(xpFor(level))) throw new UserError('That level is too large to store.');
+  if (!Number.isInteger(level) || level < 1 || level > MAX_LEVEL) throw new UserError(`The level must be a whole number from 1 to ${MAX_LEVEL}.`);
   return level;
 };
 
@@ -47,32 +52,51 @@ const track = (key, now) => {
 const isEligible = (message) =>
   message.inGuild() && !message.author.bot && !message.webhookId && !message.system && NORMAL_TYPES.has(message.type) && Boolean(message.member);
 
-const grantRewards = async (guild, member, level) => {
-  const granted = [];
-  const failed = [];
-  const owned = new Set(member.roles.cache.keys());
+const findMember = async (guild, userId) =>
+  guild.members.cache.get(userId) ??
+  guild.members.fetch(userId).catch((error) => {
+    if (error.status === 404 || error.code === RESTJSONErrorCodes.UnknownMember) return null;
+    throw error;
+  });
 
-  for (const reward of levelRewards.upTo(guild.id, level)) {
-    if (owned.has(reward.role_id)) continue;
-    if (!guild.roles.cache.has(reward.role_id)) {
-      failed.push({ reward, reason: 'The role no longer exists.' });
-      continue;
-    }
+const failureReason = (error) =>
+  error.code === RESTJSONErrorCodes.MissingPermissions ? 'Roland cannot manage this role (role hierarchy or Manage Roles).' : error.message;
+
+const syncReward = async (guild, member, level, retired = []) => {
+  const rewards = levelRewards.list(guild.id);
+  const target = rewards.filter((reward) => reward.level <= level).at(-1) ?? null;
+  const result = { added: null, removed: [], failed: [] };
+
+  const candidates = [...rewards.map((reward) => reward.role_id), ...retired];
+  const stale = new Set(candidates.filter((roleId) => roleId !== target?.role_id && !PROTECTED_ROLES.has(roleId)));
+  for (const roleId of stale) {
+    if (!member.roles.cache.has(roleId)) continue;
     try {
-      await member.roles.add(reward.role_id, `Level ${reward.level} reward`);
-      owned.add(reward.role_id);
-      granted.push(reward);
+      await member.roles.remove(roleId, 'Level reward replaced');
+      result.removed.push(roleId);
     } catch (error) {
-      const reason = error.code === RESTJSONErrorCodes.MissingPermissions ? "Roland cannot manage this role (role hierarchy or Manage Roles)." : error.message;
-      failed.push({ reward, reason });
+      result.failed.push({ roleId, action: 'remove', reason: failureReason(error) });
     }
   }
 
-  if (failed.length) {
-    console.error(`Failed to grant level rewards to ${member.id}: ${failed.map(({ reward, reason }) => `level ${reward.level} (${reason})`).join(', ')}`);
-    await logging.sendEmbed(guild, messages.rewardFailureEmbed(member, failed));
+  if (target && !member.roles.cache.has(target.role_id)) {
+    if (!guild.roles.cache.has(target.role_id)) {
+      result.failed.push({ roleId: target.role_id, action: 'add', reason: 'The role no longer exists.' });
+    } else {
+      try {
+        await member.roles.add(target.role_id, `Level ${target.level} reward`);
+        result.added = target.role_id;
+      } catch (error) {
+        result.failed.push({ roleId: target.role_id, action: 'add', reason: failureReason(error) });
+      }
+    }
   }
-  return { granted, failed };
+
+  if (result.failed.length) {
+    console.error(`Failed to update level rewards for ${member.id}: ${result.failed.map((failure) => `${failure.action} ${failure.roleId} (${failure.reason})`).join(', ')}`);
+    await logging.sendEmbed(guild, messages.rewardFailureEmbed(member, result.failed));
+  }
+  return result;
 };
 
 const handleMessage = async (message, now = message.createdTimestamp ?? Date.now()) => {
@@ -82,59 +106,67 @@ const handleMessage = async (message, now = message.createdTimestamp ?? Date.now
   const { guild, member } = message;
   const { before, after } = track(`${guild.id}:${member.id}`, now);
   const boosted = after >= ACTIVITY_THRESHOLD;
-  const gained = XP_PER_MESSAGE * (boosted ? MULTIPLIER : 1);
-  const { xp } = levels.addXp(guild.id, member.id, gained, now);
+  const { previous, xp, gained } = levels.addXp(guild.id, member.id, XP_PER_MESSAGE * (boosted ? MULTIPLIER : 1), now);
   const level = levelFor(xp);
-  const previousLevel = levelFor(xp - gained);
+  const previousLevel = levelFor(previous);
 
-  const notified = before < ACTIVITY_THRESHOLD && boosted;
+  const notified = before < ACTIVITY_THRESHOLD && boosted && gained > 0;
   if (notified) await member.user.send({ embeds: [messages.boostNotice(guild)] }).catch(() => {});
-  const rewards = level > previousLevel ? await grantRewards(guild, member, level) : null;
+  const rewards = level > previousLevel ? await syncReward(guild, member, level) : null;
 
   return { gained, xp, level, previousLevel, boosted, notified, rewards };
 };
 
-const profile = (guildId, userId, now = Date.now()) => {
+const profile = (guildId, userId) => {
   const xp = levels.get(guildId, userId)?.xp ?? 0;
-  const level = levelFor(xp);
-  const recent = recentMessages(`${guildId}:${userId}`, now).length;
-  return {
-    xp,
-    level,
-    current: xp - xpFor(level),
-    perLevel: XP_PER_LEVEL,
-    nextLevelXp: xpFor(level + 1),
-    remaining: xpFor(level + 1) - xp,
-    recent,
-    threshold: ACTIVITY_THRESHOLD,
-    boosted: recent >= ACTIVITY_THRESHOLD,
-  };
+  return { xp, level: levelFor(xp) };
 };
 
 const setLevel = async (guild, member, level, now = Date.now()) => {
   validateLevel(level);
   if (member.user.bot) throw new UserError('Bots cannot have levels.');
   const { previous, xp } = levels.setXp(guild.id, member.id, xpFor(level), now);
-  const rewards = await grantRewards(guild, member, level);
+  const rewards = await syncReward(guild, member, level);
   return { previous: { xp: previous, level: levelFor(previous) }, xp, level, rewards };
 };
 
-const setReward = (guild, role, level, createdBy) => {
+const setReward = async (guild, role, level, createdBy) => {
   validateLevel(level);
   if (!role) throw new UserError('Role not found.');
   if (role.id === guild.id) throw new UserError('@everyone cannot be used as a level reward.');
+  if (PROTECTED_ROLES.has(role.id)) throw new UserError('Staff roles and the Member role cannot be used as level rewards.');
   if (role.managed) throw new UserError('This role is managed by an integration and cannot be assigned.');
   if (!role.editable) throw new UserError('Roland cannot manage this role. Move the Roland role above it and make sure Roland has the Manage Roles permission.');
 
   const previous = levelRewards.set(guild.id, level, role.id, createdBy);
-  return { previous: previous === role.id ? null : previous, otherLevels: levelRewards.levelsForRole(guild.id, role.id).filter((other) => other !== level) };
+  const otherLevels = levelRewards.levelsForRole(guild.id, role.id).filter((other) => other !== level);
+  const retired = previous && previous !== role.id ? [previous] : [];
+
+  const updated = { members: 0, failed: 0 };
+  for (const row of levels.atLeast(guild.id, xpFor(level))) {
+    const member = await findMember(guild, row.user_id).catch(() => null);
+    if (!member || member.user.bot) continue;
+    const result = await syncReward(guild, member, levelFor(row.xp), retired);
+    if (result.added || result.removed.length) updated.members++;
+    if (result.failed.length) updated.failed++;
+  }
+
+  return { previous: previous === role.id ? null : previous, otherLevels, updated };
 };
 
-const leaderboard = (guild, limit = 10) =>
-  levels
-    .top(guild.id, limit + 15)
-    .filter((row) => !(guild.client.users.cache.get(row.user_id)?.bot))
-    .slice(0, limit);
+const leaderboard = async (guild) => {
+  const entries = [];
+  for (let offset = 0; entries.length < LEADERBOARD_SIZE; offset += 50) {
+    const rows = levels.ranked(guild.id, 50, offset);
+    for (const row of rows) {
+      const member = await findMember(guild, row.user_id);
+      if (member && !member.user.bot) entries.push({ ...row, level: levelFor(row.xp) });
+      if (entries.length === LEADERBOARD_SIZE) break;
+    }
+    if (rows.length < 50) break;
+  }
+  return entries;
+};
 
 const sweep = (now = Date.now()) => {
   for (const key of [...activity.keys()]) recentMessages(key, now);
@@ -146,12 +178,14 @@ const start = () => setInterval(() => sweep(), SWEEP_INTERVAL);
 module.exports = {
   XP_PER_LEVEL,
   XP_PER_MESSAGE,
+  MAX_LEVEL,
+  MAX_XP,
   ACTIVITY_THRESHOLD,
   ACTIVITY_WINDOW,
   levelFor,
   xpFor,
   handleMessage,
-  grantRewards,
+  syncReward,
   profile,
   setLevel,
   setReward,

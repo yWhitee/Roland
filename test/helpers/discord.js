@@ -160,6 +160,7 @@ const makeMember = (role, { dm = true, globalName = null } = {}) => {
     roles: {
       cache: roles,
       add: async (roleId) => roles.set(roleId, {}),
+      remove: async (roleId) => roles.delete(roleId),
     },
     setNickname: async (nickname) => {
       member.nickname = nickname;

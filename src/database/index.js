@@ -164,6 +164,7 @@ const migrations = [
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (guild_id, level)
   );`,
+  `UPDATE levels SET xp = 19999 WHERE xp > 19999;`,
 ];
 
 let db;

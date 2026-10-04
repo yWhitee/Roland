@@ -14,9 +14,9 @@ const set = (guildId, level, roleId, createdBy, now = Date.now()) => {
   }).immediate();
 };
 
-const upTo = (guildId, level) => database.get().prepare('SELECT * FROM level_role_rewards WHERE guild_id = ? AND level <= ? ORDER BY level').all(guildId, level);
+const list = (guildId) => database.get().prepare('SELECT * FROM level_role_rewards WHERE guild_id = ? ORDER BY level').all(guildId);
 
 const levelsForRole = (guildId, roleId) =>
   database.get().prepare('SELECT level FROM level_role_rewards WHERE guild_id = ? AND role_id = ? ORDER BY level').all(guildId, roleId).map((row) => row.level);
 
-module.exports = { get, set, upTo, levelsForRole };
+module.exports = { get, set, list, levelsForRole };
