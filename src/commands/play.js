@@ -1,4 +1,4 @@
-const { ActionRowBuilder, ButtonBuilder, ButtonStyle, InteractionContextType, MessageFlags, SlashCommandBuilder } = require('discord.js');
+const { ActionRowBuilder, ApplicationIntegrationType, ButtonBuilder, ButtonStyle, InteractionContextType, MessageFlags, SlashCommandBuilder } = require('discord.js');
 
 const GAME_URL = 'https://www.roblox.com/games/138399961471218';
 
@@ -7,6 +7,7 @@ module.exports = {
   data: new SlashCommandBuilder()
     .setName('play')
     .setDescription('Play Slime Odyssey: Anime Realms on Roblox')
+    .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
     .setContexts(InteractionContextType.Guild, InteractionContextType.BotDM),
   execute: (interaction) =>
     interaction.reply({

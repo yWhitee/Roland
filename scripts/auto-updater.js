@@ -1,23 +1,14 @@
 const { execFile, spawn } = require('node:child_process');
-const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.resolve(__dirname, '..');
 const DEPENDENCY_FILES = ['package.json', 'package-lock.json'];
-const REGISTRATION_FILES = ['src/commandRegistration.js', 'src/deploy-commands.js'];
 const SELF = 'scripts/auto-updater.js';
 const UPDATER_CHANGED_EXIT_CODE = 75;
 const RESTART_DELAYS = [1_000, 2_000, 5_000, 15_000, 30_000, 60_000];
 const STABLE_AFTER = 60_000;
 const STOP_TIMEOUT = 15_000;
-
-const PAYLOAD_SCRIPT = [
-  "const path = require('node:path');",
-  "const load = require('./src/loader');",
-  "const { split } = require('./src/commandRegistration');",
-  "process.stdout.write(JSON.stringify(split(load(path.join(process.cwd(), 'src', 'commands')))));",
-].join('\n');
 
 const exec = (file, args, options) =>
   new Promise((resolve, reject) => {
@@ -48,43 +39,12 @@ const createUpdater = ({
       child.on('error', reject);
       child.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`${command} ${args.join(' ')} exited with code ${code}`))));
     }),
-  commandPayload = () => exec(process.execPath, ['-e', PAYLOAD_SCRIPT], { cwd: repoDir }),
-  deployedRecord = path.join(repoDir, 'data', 'deployed-commands.sha256'),
   spawnBot = () => spawn(process.execPath, [path.join(repoDir, 'src', 'index.js')], { cwd: repoDir, stdio: 'inherit' }),
   exit = (code) => process.exit(code),
 } = {}) => {
   const state = { branch, bot: null, crashes: 0, current: null, stopping: false, shuttingDown: false, timer: null, restartTimer: null };
   const short = (sha) => sha.slice(0, 7);
   const trackingRef = () => `refs/remotes/${remote}/${state.branch}`;
-
-  const readPayload = () =>
-    commandPayload().catch((error) => {
-      log(`Could not read the slash command definitions: ${error.message}`);
-      return null;
-    });
-
-  const fingerprint = (payload) => crypto.createHash('sha256').update(payload).digest('hex');
-
-  const isDeployed = (payload) => {
-    try {
-      return fs.readFileSync(deployedRecord, 'utf8').trim() === fingerprint(payload);
-    } catch {
-      return false;
-    }
-  };
-
-  const deploy = async (payload, reason) => {
-    log(`${reason} Running npm run deploy.`);
-    try {
-      await run('npm', ['run', 'deploy']);
-      if (payload !== null) {
-        fs.mkdirSync(path.dirname(deployedRecord), { recursive: true });
-        fs.writeFileSync(deployedRecord, `${fingerprint(payload)}\n`);
-      }
-    } catch (error) {
-      log(`npm run deploy failed: ${error.message}`);
-    }
-  };
 
   const startBot = () => {
     if (state.bot || state.shuttingDown) return state.bot;
@@ -140,8 +100,6 @@ const createUpdater = ({
       });
     }
     log(`Monitoring ${remote}/${state.branch} every ${interval / 1000}s in ${repoDir}.`);
-    const payload = await readPayload();
-    if (payload !== null && !isDeployed(payload)) await deploy(payload, 'Slash commands have not been registered with the current definitions.');
     startBot();
   };
 
@@ -160,11 +118,6 @@ const createUpdater = ({
       const install = fs.existsSync(path.join(repoDir, 'package-lock.json')) ? ['ci', '--no-audit', '--no-fund'] : ['install', '--no-audit', '--no-fund'];
       log(`Dependencies changed. Running npm ${install[0]}.`);
       await run('npm', install).catch((error) => log(`npm ${install[0]} failed: ${error.message}`));
-    }
-
-    const payload = await readPayload();
-    if ((payload !== null && !isDeployed(payload)) || changed.some((file) => REGISTRATION_FILES.includes(file))) {
-      await deploy(payload, 'Slash command definitions changed.');
     }
 
     if (changed.includes(SELF)) {
@@ -273,4 +226,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createUpdater, DEPENDENCY_FILES, REGISTRATION_FILES, UPDATER_CHANGED_EXIT_CODE };
+module.exports = { createUpdater, DEPENDENCY_FILES, UPDATER_CHANGED_EXIT_CODE };

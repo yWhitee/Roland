@@ -86,7 +86,7 @@ test('existing commands are registered as guild commands and /play as a global c
   assert.deepEqual(guild.body.map((command) => command.name).sort(), EXPECTED, 'existing commands stay guild commands');
   assert.ok(!guild.body.some((command) => command.name === 'play'), 'no duplicate /play guild command');
   assert.deepEqual(global.body.map((command) => command.name), ['play'], 'only /play is global');
-  assert.deepEqual(global.body[0], { options: [], name: 'play', description: 'Play Slime Odyssey: Anime Realms on Roblox', contexts: [0, 1], type: 1 });
+  assert.deepEqual(global.body[0], { options: [], name: 'play', description: 'Play Slime Odyssey: Anime Realms on Roblox', contexts: [0, 1], integration_types: [0], type: 1 });
   assert.equal(global.body[0].default_member_permissions, undefined, 'no permission restriction');
 });
 

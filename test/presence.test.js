@@ -5,8 +5,8 @@ const path = require('node:path');
 const { ActivityType, Client, GatewayIntentBits } = require('discord.js');
 const presence = require('../src/presence');
 
-const NAME = 'Generic Civilization Game ⚔';
-const URL = 'https://www.roblox.com/games/138399961471218';
+const NAME = 'Generic Civilization Game 🚩';
+const STATE = '> PRE-ALPHA';
 
 const login = () => {
   const client = new Client({ intents: [GatewayIntentBits.Guilds], presence: presence.options() });
@@ -26,24 +26,24 @@ const quietly = (task) => {
   }
 };
 
-test('the activity is exactly Playing Generic Civilization Game ⚔ with the game URL as state', () => {
-  assert.deepEqual(presence.ACTIVITY, { type: 0, name: NAME, state: URL });
+test('the activity is exactly Playing Generic Civilization Game 🚩 with the PRE-ALPHA state', () => {
+  assert.deepEqual(presence.ACTIVITY, { type: 0, name: 'Generic Civilization Game 🚩', state: '> PRE-ALPHA' });
   assert.equal(presence.ACTIVITY.type, ActivityType.Playing);
-  assert.equal(presence.ACTIVITY.name.at(-1).codePointAt(0), 0x2694);
-  assert.equal(presence.ACTIVITY.state, URL);
-  assert.deepEqual(presence.options(), { status: 'online', activities: [{ type: 0, name: NAME, state: URL }] });
+  assert.equal([...presence.ACTIVITY.name].at(-1).codePointAt(0), 0x1f6a9);
+  assert.doesNotMatch(presence.ACTIVITY.state, /roblox|https?:/i);
+  assert.deepEqual(presence.options(), { status: 'online', activities: [{ type: 0, name: NAME, state: STATE }] });
 });
 
 test('discord.js sends only type, name and state in the Gateway presence', () => {
   const client = login();
   assert.deepEqual(client.options.ws.presence, {
-    activities: [{ type: 0, name: NAME, state: URL, url: undefined }],
+    activities: [{ type: 0, name: NAME, state: STATE, url: undefined }],
     afk: false,
     since: null,
     status: 'online',
   });
-  assert.equal(JSON.stringify(client.options.ws.presence.activities), JSON.stringify([{ type: 0, name: NAME, state: URL }]));
-  assert.deepEqual(presence.ACTIVITY, { type: 0, name: NAME, state: URL }, 'the shared activity is not mutated');
+  assert.equal(JSON.stringify(client.options.ws.presence.activities), JSON.stringify([{ type: 0, name: NAME, state: STATE }]));
+  assert.deepEqual(presence.ACTIVITY, { type: 0, name: NAME, state: STATE }, 'the shared activity is not mutated');
 });
 
 test('the startup report logs the activity without leaking secrets', () => {
@@ -51,7 +51,7 @@ test('the startup report logs the activity without leaking secrets', () => {
   client.token = 'super-secret-token';
   const { result, lines } = quietly(() => presence.report(client));
   assert.equal(result.name, NAME);
-  assert.deepEqual(lines, [`Rich Presence configured successfully: Playing "${NAME}" (${URL}).`]);
+  assert.deepEqual(lines, ['Rich Presence configured successfully: Playing "Generic Civilization Game 🚩" (> PRE-ALPHA).']);
   assert.ok(!lines.join('\n').includes('super-secret-token'));
 });
 
@@ -68,5 +68,5 @@ test('presence is set once through the client options with no unsupported fields
   assert.match(index, /new Client\(\{ intents, presence: presence\.options\(\) \}\)/);
   assert.match(ready, /presence\.report\(client\)/);
   assert.doesNotMatch(module, /setInterval|setPresence|setActivity/);
-  assert.doesNotMatch(module, /details|assets|buttons|timestamps|party|application_id|_url|url:|StatusDisplayType/);
+  assert.doesNotMatch(module, /details|assets|buttons|timestamps|party|application_id|url|StatusDisplayType/i);
 });
