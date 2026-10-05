@@ -5,6 +5,7 @@ const automod = require('../services/automod');
 const levels = require('../services/levels');
 const presence = require('../presence');
 const tempBans = require('../services/tempBans');
+const verification = require('../services/verification');
 
 module.exports = {
   name: Events.ClientReady,
@@ -15,6 +16,7 @@ module.exports = {
     tempBans.start(client);
     automod.start(client);
     levels.start();
+    verification.startCleanup();
 
     if (client.application.id !== config.clientId) console.warn(`DISCORD_CLIENT_ID ${config.clientId} does not match the bot's application ${client.application.id}.`);
     const { guild, global } = await registerCommands(client.rest, { clientId: client.application.id, guildId: config.guildId, commands: [...client.commands.values()] });

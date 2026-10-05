@@ -19,24 +19,28 @@ const panelComponents = () => [
   ),
 ];
 
-const startMessage = (url, expiresAt, current = null) => ({
+const consentMessage = (relink = false) => ({
   embeds: [
     new EmbedBuilder()
       .setColor(Colors.info)
       .setTitle('Verify with Roblox')
       .setDescription(
         [
-          ...(current
-            ? [`You are currently verified as **${current.roblox_username}**. Completing this verification will replace your linked Roblox account.`, '']
-            : []),
-          'Click the button below to sign in with Roblox and authorize Roland.',
-          'You will never be asked for your Roblox password by Roland.',
+          'RoVer has not shared a Roblox account with this server for you yet.',
           '',
-          `This link can only be used once and expires <t:${Math.floor(expiresAt / 1000)}:R>.`,
+          '1. Use the `/verify` command of the **RoVer** bot in this server and follow its steps.',
+          "2. When RoVer asks, allow this server to see your Roblox account. If you are already verified with RoVer, grant access with RoVer's `/privacy` command.",
+          '3. Come back here and click **Check again**.',
+          '',
+          'Your Roblox account is only shared with this server if you allow it.',
         ].join('\n'),
       ),
   ],
-  components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel('Continue to Roblox').setStyle(ButtonStyle.Link).setURL(url))],
+  components: [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(relink ? 'verify:check:relink' : 'verify:check').setLabel('Check again').setEmoji('🔄').setStyle(ButtonStyle.Primary),
+    ),
+  ],
 });
 
 const alreadyVerifiedEmbed = (verification) =>
@@ -83,4 +87,4 @@ const infoEmbed = (user, verification) => {
   );
 };
 
-module.exports = { PANEL, panelEmbed, panelComponents, startMessage, alreadyVerifiedEmbed, resultEmbed, logEmbed, infoEmbed };
+module.exports = { PANEL, panelEmbed, panelComponents, consentMessage, alreadyVerifiedEmbed, resultEmbed, logEmbed, infoEmbed };

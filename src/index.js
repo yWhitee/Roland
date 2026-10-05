@@ -7,7 +7,6 @@ const load = require('./loader');
 const presence = require('./presence');
 const automod = require('./services/automod');
 const verification = require('./services/verification');
-const web = require('./web/server');
 
 process.on('unhandledRejection', (error) => console.error('Unhandled rejection:', error));
 
@@ -31,11 +30,7 @@ const start = async () => {
     });
   }
 
-  if (verification.configure({ ...config.roblox, client })) {
-    web.start({ [verification.callbackPath()]: verification.handleCallback }, config.oauthServer);
-  } else {
-    console.log('Roblox verification is disabled until ROBLOX_CLIENT_ID, ROBLOX_CLIENT_SECRET and ROBLOX_REDIRECT_URI are set.');
-  }
+  if (!verification.configure({ apiKey: config.roverApiKey })) console.log('Roblox verification is disabled until ROVER_API_KEY is set.');
 
   await client.login(config.token);
 };

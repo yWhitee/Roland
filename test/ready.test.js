@@ -14,6 +14,7 @@ const load = require('../src/loader');
 const automod = require('../src/services/automod');
 const levels = require('../src/services/levels');
 const tempBans = require('../src/services/tempBans');
+const verification = require('../src/services/verification');
 
 const commands = load(path.join(__dirname, '..', 'src', 'commands'));
 const GUILD_COMMANDS = [
@@ -42,10 +43,10 @@ const discord = async (respond = (request, body) => [200, body]) => {
 
 const start = async (rest, applicationId = APPLICATION) => {
   const lines = [];
-  const original = { log: console.log, warn: console.warn, starts: [tempBans.start, automod.start, levels.start] };
+  const original = { log: console.log, warn: console.warn, starts: [tempBans.start, automod.start, levels.start, verification.startCleanup] };
   console.log = (line) => lines.push(line);
   console.warn = (line) => lines.push(line);
-  tempBans.start = automod.start = levels.start = () => {};
+  tempBans.start = automod.start = levels.start = verification.startCleanup = () => {};
   try {
     await ready.execute({
       user: { tag: 'Roland#0001' },
@@ -57,7 +58,7 @@ const start = async (rest, applicationId = APPLICATION) => {
     return lines;
   } finally {
     Object.assign(console, { log: original.log, warn: original.warn });
-    [tempBans.start, automod.start, levels.start] = original.starts;
+    [tempBans.start, automod.start, levels.start, verification.startCleanup] = original.starts;
   }
 };
 

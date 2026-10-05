@@ -165,6 +165,8 @@ const migrations = [
     PRIMARY KEY (guild_id, level)
   );`,
   `UPDATE levels SET xp = 19999 WHERE xp > 19999;`,
+  `DROP TABLE oauth_states;
+  ALTER TABLE verifications ADD COLUMN expires_at INTEGER;`,
 ];
 
 let db;

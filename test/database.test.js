@@ -22,7 +22,8 @@ test('a fresh database is migrated to the latest version', () => {
   const db = database.open(fresh);
   assert.equal(db.pragma('user_version', { simple: true }), database.migrations.length);
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name);
-  for (const table of ['punishments', 'guild_settings', 'ticket_panels', 'ticket_counters', 'tickets', 'verifications', 'verification_panels', 'oauth_states', 'automod_settings', 'automod_flags']) assert.ok(tables.includes(table), table);
+  for (const table of ['punishments', 'guild_settings', 'ticket_panels', 'ticket_counters', 'tickets', 'verifications', 'verification_panels', 'automod_settings', 'automod_flags']) assert.ok(tables.includes(table), table);
+  assert.ok(!tables.includes('oauth_states'));
   database.open(file);
 });
 
@@ -58,7 +59,7 @@ test('an existing version 2 database with tickets is upgraded to add verificatio
   assert.equal(database.get().pragma('user_version', { simple: true }), database.migrations.length);
   assert.equal(tickets.findActiveByCreator('g', 'u').number, 7);
   const tables = database.get().prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name);
-  for (const table of ['verifications', 'verification_panels', 'oauth_states']) assert.ok(tables.includes(table), table);
+  for (const table of ['verifications', 'verification_panels']) assert.ok(tables.includes(table), table);
   database.open(file);
 });
 
@@ -80,20 +81,6 @@ test('an existing version 3 database gains AutoMod tables and punishment sources
   for (const table of ['automod_settings', 'automod_flags', 'automod_whitelist', 'automod_raid_state', 'automod_lockdowns', 'automod_lockdown_overwrites']) {
     assert.ok(tables.includes(table), table);
   }
-  database.open(file);
-});
-
-test('an existing version 4 database keeps pending OAuth states and gains the state mode', () => {
-  const legacy = tempDatabase();
-  const db = new Database(legacy);
-  database.migrations.slice(0, 4).forEach((sql) => db.exec(sql));
-  db.pragma('user_version = 4');
-  db.prepare("INSERT INTO oauth_states (state_hash, discord_id, guild_id, created_at, expires_at) VALUES ('hash', 'u', 'g', 1, 2)").run();
-  db.close();
-
-  database.open(legacy);
-  assert.equal(database.get().pragma('user_version', { simple: true }), database.migrations.length);
-  assert.equal(database.get().prepare("SELECT mode FROM oauth_states WHERE state_hash = 'hash'").get().mode, 'link');
   database.open(file);
 });
 
@@ -124,9 +111,27 @@ test('an existing version 6 database caps stored XP at the level 200 limit', () 
   db.close();
 
   database.open(legacy);
-  assert.equal(database.get().pragma('user_version', { simple: true }), 7);
+  assert.equal(database.get().pragma('user_version', { simple: true }), database.migrations.length);
   const xp = Object.fromEntries(database.get().prepare('SELECT user_id, xp FROM levels').all().map((row) => [row.user_id, row.xp]));
   assert.deepEqual(xp, { huge: 19_999, normal: 1234 });
+  database.open(file);
+});
+
+test('an existing version 7 database drops the Roblox OAuth states and keeps verifications without an expiry', () => {
+  const legacy = tempDatabase();
+  const db = new Database(legacy);
+  database.migrations.slice(0, 7).forEach((sql) => db.exec(sql));
+  db.pragma('user_version = 7');
+  db.prepare("INSERT INTO oauth_states (state_hash, discord_id, guild_id, created_at, expires_at) VALUES ('hash', 'u', 'g', 1, 2)").run();
+  db.prepare("INSERT INTO verifications (discord_id, roblox_id, roblox_username, verified_at) VALUES ('u', '1', 'oauth_player', 1)").run();
+  db.close();
+
+  database.open(legacy);
+  assert.equal(database.get().pragma('user_version', { simple: true }), database.migrations.length);
+  const tables = database.get().prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name);
+  assert.ok(!tables.includes('oauth_states'));
+  const kept = database.get().prepare('SELECT roblox_username, expires_at FROM verifications').get();
+  assert.deepEqual({ ...kept }, { roblox_username: 'oauth_player', expires_at: null });
   database.open(file);
 });
 

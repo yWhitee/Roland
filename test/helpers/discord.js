@@ -205,8 +205,13 @@ const makeInteraction = ({ guild, member, customId = '', message = null, fields 
     deferred: false,
     replied: false,
     fields: { getTextInputValue: (id) => fields[id] ?? '' },
-    deferReply: async () => {
+    deferReply: async (payload) => {
       interaction.deferred = true;
+      calls.deferred = payload;
+    },
+    deferUpdate: async () => {
+      interaction.deferred = true;
+      calls.deferred = 'update';
     },
     editReply: async (payload) => calls.replies.push(payload),
     reply: async (payload) => {

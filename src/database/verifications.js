@@ -4,7 +4,7 @@ const findByDiscord = (discordId) => database.get().prepare('SELECT * FROM verif
 
 const findByRoblox = (robloxId) => database.get().prepare('SELECT * FROM verifications WHERE roblox_id = ?').get(robloxId);
 
-const link = ({ discordId, robloxId, robloxUsername, robloxDisplayName = null, guildId = null, verifiedAt = Date.now(), replace = false }) => {
+const link = ({ discordId, robloxId, robloxUsername, robloxDisplayName = null, guildId = null, verifiedAt = Date.now(), expiresAt = null, replace = false }) => {
   const db = database.get();
   return db.transaction(() => {
     const existing = findByDiscord(discordId);
@@ -13,7 +13,7 @@ const link = ({ discordId, robloxId, robloxUsername, robloxDisplayName = null, g
 
     if (existing?.roblox_id === robloxId) {
       if (replace) {
-        db.prepare('UPDATE verifications SET roblox_username = ?, roblox_display_name = ? WHERE discord_id = ?').run(robloxUsername, robloxDisplayName, discordId);
+        db.prepare('UPDATE verifications SET roblox_username = ?, roblox_display_name = ?, expires_at = ? WHERE discord_id = ?').run(robloxUsername, robloxDisplayName, expiresAt, discordId);
       }
       return { status: 'already-verified', verification: findByDiscord(discordId) };
     }
@@ -21,17 +21,20 @@ const link = ({ discordId, robloxId, robloxUsername, robloxDisplayName = null, g
 
     if (existing) {
       db.prepare(`
-        UPDATE verifications SET roblox_id = ?, roblox_username = ?, roblox_display_name = ?, guild_id = ?, verified_at = ? WHERE discord_id = ?
-      `).run(robloxId, robloxUsername, robloxDisplayName, guildId, verifiedAt, discordId);
+        UPDATE verifications SET roblox_id = ?, roblox_username = ?, roblox_display_name = ?, guild_id = ?, verified_at = ?, expires_at = ? WHERE discord_id = ?
+      `).run(robloxId, robloxUsername, robloxDisplayName, guildId, verifiedAt, expiresAt, discordId);
       return { status: 'relinked', verification: findByDiscord(discordId), previous: existing };
     }
 
     db.prepare(`
-      INSERT INTO verifications (discord_id, roblox_id, roblox_username, roblox_display_name, guild_id, verified_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(discordId, robloxId, robloxUsername, robloxDisplayName, guildId, verifiedAt);
+      INSERT INTO verifications (discord_id, roblox_id, roblox_username, roblox_display_name, guild_id, verified_at, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(discordId, robloxId, robloxUsername, robloxDisplayName, guildId, verifiedAt, expiresAt);
     return { status: 'linked', verification: findByDiscord(discordId) };
   }).immediate();
 };
 
-module.exports = { findByDiscord, findByRoblox, link };
+const purgeExpired = (now = Date.now()) =>
+  database.get().prepare('DELETE FROM verifications WHERE expires_at IS NOT NULL AND expires_at <= ?').run(now).changes;
+
+module.exports = { findByDiscord, findByRoblox, link, purgeExpired };

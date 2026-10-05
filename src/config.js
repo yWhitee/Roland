@@ -14,13 +14,5 @@ module.exports = {
   clientId: process.env.DISCORD_CLIENT_ID,
   guildId: process.env.DISCORD_GUILD_ID,
   publicKey: process.env.DISCORD_PUBLIC_KEY,
-  roblox: {
-    clientId: process.env.ROBLOX_CLIENT_ID,
-    clientSecret: process.env.ROBLOX_CLIENT_SECRET,
-    redirectUri: process.env.ROBLOX_REDIRECT_URI,
-  },
-  oauthServer: {
-    host: process.env.OAUTH_SERVER_HOST || '127.0.0.1',
-    port: Number(process.env.OAUTH_SERVER_PORT) || 3000,
-  },
+  roverApiKey: process.env.ROVER_API_KEY,
 };

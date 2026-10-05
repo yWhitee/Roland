@@ -6,7 +6,7 @@ const { PANEL, panelEmbed } = require('../services/verification/messages');
 const { successEmbed } = require('../utils/embeds');
 const { UserError } = require('../utils/errors');
 
-const NOT_CONFIGURED = '\nNote: Roblox OAuth is not configured yet, so the button will not work until ROBLOX_CLIENT_ID, ROBLOX_CLIENT_SECRET and ROBLOX_REDIRECT_URI are set.';
+const NOT_CONFIGURED = '\nNote: RoVer is not configured yet, so the button will not work until ROVER_API_KEY is set.';
 
 module.exports = {
   level: Level.CREATOR,
