@@ -5,12 +5,14 @@ const {
   ChannelSelectMenuBuilder,
   ChannelType,
   EmbedBuilder,
+  FileUploadBuilder,
   LabelBuilder,
   ModalBuilder,
   StringSelectMenuBuilder,
   TextInputBuilder,
   TextInputStyle,
 } = require('discord.js');
+const { MAX_BYTES } = require('./jsonImport');
 const { MAX_FIELDS, toEmbed, isEmpty } = require('./sessions');
 
 const SECTIONS = {
@@ -94,6 +96,7 @@ const components = (session, view) => {
       button(session, 'timestamp', `Timestamp: ${timestamp ? 'on' : 'off'}`),
     ),
     row(
+      button(session, 'import', 'Import JSON'),
       button(session, 'preview', 'Preview'),
       button(session, 'reset', 'Clear', ButtonStyle.Danger),
       button(session, 'send', 'Send', ButtonStyle.Success),
@@ -102,10 +105,11 @@ const components = (session, view) => {
   ];
 };
 
-const panel = (session, view = 'main') => {
+const panel = (session, view = 'main', notice = null) => {
   const { state } = session;
   const lines = [`**${session.title}** — ${VIEWS[view]}`];
   if (session.note) lines.push(session.note);
+  if (notice) lines.push(notice);
   if (state.content) lines.push('', '**Message content:**', state.content.length > 1500 ? `${state.content.slice(0, 1500)}…` : state.content);
 
   const preview = isEmpty(state)
@@ -146,4 +150,15 @@ const fieldModal = (session, index) => {
     );
 };
 
-module.exports = { SECTIONS, panel, sectionModal, fieldModal };
+const importModal = (session) =>
+  new ModalBuilder()
+    .setCustomId(customId(session, 'importfile'))
+    .setTitle('Import JSON')
+    .addLabelComponents(
+      new LabelBuilder()
+        .setLabel('JSON file')
+        .setDescription(`One .json file up to ${MAX_BYTES / 1024} KB. It replaces everything in the editor; nothing is sent yet.`)
+        .setFileUploadComponent(new FileUploadBuilder().setCustomId('file').setMinValues(1).setMaxValues(1).setRequired(true)),
+    );
+
+module.exports = { SECTIONS, panel, sectionModal, fieldModal, importModal };

@@ -1,7 +1,9 @@
 const { MessageFlags, PermissionFlagsBits } = require('discord.js');
+const jsonImport = require('./jsonImport');
 const sessions = require('./sessions');
-const { SECTIONS, panel, sectionModal, fieldModal } = require('./panel');
-const { UserError } = require('../../utils/errors');
+const { SECTIONS, panel, sectionModal, fieldModal, importModal } = require('./panel');
+const { errorEmbed } = require('../../utils/embeds');
+const { UserError, userMessage } = require('../../utils/errors');
 
 const send = (channel, payload) => channel.send(payload);
 
@@ -65,6 +67,18 @@ const actions = {
     return interaction.update(panel(session));
   },
   field: (interaction, session, index) => saveField(interaction, session, index === 'new' ? index : Number(index)),
+  import: (interaction, session) => interaction.showModal(importModal(session)),
+  importfile: async (interaction, session) => {
+    await interaction.deferUpdate();
+    let imported;
+    try {
+      imported = await jsonImport.read(interaction.fields.getUploadedFiles('file'));
+      sessions.update(sessions.get(session.id, interaction.user.id), imported.state);
+    } catch (error) {
+      return interaction.followUp({ embeds: [errorEmbed(userMessage(error))], flags: MessageFlags.Ephemeral });
+    }
+    return interaction.editReply(panel(session, 'main', `✅ Imported \`${imported.name}\`. Review and edit it below, then press **Send**. Nothing has been sent yet.`));
+  },
   timestamp: (interaction, session) => {
     session.state.timestamp = !session.state.timestamp;
     return interaction.update(panel(session));
@@ -98,7 +112,7 @@ const actions = {
 const handle = async (interaction) => {
   const [, sessionId, action, argument] = interaction.customId.split(':');
   const session = sessions.get(sessionId, interaction.user.id);
-  const run = actions[action];
+  const run = Object.hasOwn(actions, action) ? actions[action] : null;
   if (!run) throw new UserError('Unknown action.');
   await run(interaction, session, argument);
 };

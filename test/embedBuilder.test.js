@@ -92,7 +92,7 @@ test('builder flow: sections, fields, timestamp and cancel', async () => {
   assert.deepEqual(labels, [
     'Title & description', 'Author', 'Images', 'Footer', 'Message content',
     'Add field', 'Edit field', 'Remove field', 'Timestamp: off',
-    'Preview', 'Clear', 'Send', 'Cancel',
+    'Import JSON', 'Preview', 'Clear', 'Send', 'Cancel',
   ]);
 
   const open = interaction('embed', id, 'section:body');

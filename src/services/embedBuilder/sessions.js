@@ -5,6 +5,15 @@ const TTL = 30 * 60_000;
 const MAX_FIELDS = 25;
 const sessions = new Map();
 
+const MAX_URL = 2000;
+const TEXT_LIMITS = {
+  content: ['The message content', 2000],
+  title: ['The title', 256],
+  description: ['The description', 4000],
+  authorName: ['The author name', 256],
+  footer: ['The footer text', 2048],
+};
+
 const URL_KEYS = {
   url: 'The title URL',
   authorIcon: 'The author icon',
@@ -87,16 +96,31 @@ const toEmbed = (state, timestamp = Date.now()) => {
 const isEmpty = (state) =>
   !(state.title || state.description || state.authorName || state.footer || state.thumbnail || state.image || state.fields.length);
 
-const validate = (state) => {
+const problems = (state) => {
+  const found = [];
   for (const [key, label] of Object.entries(URL_KEYS)) {
-    if (state[key] && !isUrl(state[key])) throw new UserError(`${label} must be a valid URL starting with http:// or https://.`);
+    if (state[key] && (state[key].length > MAX_URL || !isUrl(state[key]))) found.push(`${label} must be a valid URL starting with http:// or https:// (at most ${MAX_URL} characters).`);
   }
-  if (state.color && !/^#?[0-9a-f]{6}$/i.test(state.color)) throw new UserError('Invalid color. Use a hex code, e.g. #5865F2.');
-  if (state.url && !state.title) throw new UserError('Set a title before adding a title URL.');
-  if ((state.authorIcon || state.authorUrl) && !state.authorName) throw new UserError('Set an author name before adding an author icon or URL.');
-  if (state.footerIcon && !state.footer) throw new UserError('Set footer text before adding a footer icon.');
-  if (state.fields.length > MAX_FIELDS) throw new UserError(`An embed can have at most ${MAX_FIELDS} fields.`);
-  if (embedLength(toEmbed(state).data) > 6000) throw new UserError('The embed exceeds the Discord limit of 6000 characters.');
+  if (state.color && !/^#?[0-9a-f]{6}$/i.test(state.color)) found.push('Invalid color. Use a hex code, e.g. #5865F2.');
+  if (state.url && !state.title) found.push('Set a title before adding a title URL.');
+  if ((state.authorIcon || state.authorUrl) && !state.authorName) found.push('Set an author name before adding an author icon or URL.');
+  if (state.footerIcon && !state.footer) found.push('Set footer text before adding a footer icon.');
+  if (state.fields.length > MAX_FIELDS) found.push(`An embed can have at most ${MAX_FIELDS} fields.`);
+  for (const [key, [label, max]] of Object.entries(TEXT_LIMITS)) {
+    if (state[key].length > max) found.push(`${label} must be at most ${max} characters (it has ${state[key].length}).`);
+  }
+  state.fields.forEach((field, index) => {
+    if (!field.name || !field.value) found.push(`Field ${index + 1} needs both a name and a value.`);
+    if (field.name.length > 256) found.push(`The name of field ${index + 1} must be at most 256 characters (it has ${field.name.length}).`);
+    if (field.value.length > 1024) found.push(`The value of field ${index + 1} must be at most 1024 characters (it has ${field.value.length}).`);
+  });
+  if (!found.length && embedLength(toEmbed(state).data) > 6000) found.push('The embed exceeds the Discord limit of 6000 characters.');
+  return found;
+};
+
+const validate = (state) => {
+  const [problem] = problems(state);
+  if (problem) throw new UserError(problem);
 };
 
 const update = (session, changes) => {
@@ -109,4 +133,4 @@ const assertNotEmpty = (state) => {
   if (isEmpty(state)) throw new UserError('The embed is empty. Add at least a title, description, field, author, footer or image.');
 };
 
-module.exports = { MAX_FIELDS, create, get, remove, reset, update, toEmbed, isEmpty, assertNotEmpty };
+module.exports = { MAX_FIELDS, MAX_URL, emptyState, create, get, remove, reset, update, problems, toEmbed, isEmpty, assertNotEmpty };

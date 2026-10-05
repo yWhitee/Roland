@@ -1,0 +1,26 @@
+{
+  "content": "Mensagem fora do embed (opcional)",
+  "embed": {
+    "title": "Título",
+    "url": "https://example.com",
+    "description": "Descrição com **markdown** do Discord.",
+    "color": "#5865F2",
+    "timestamp": true,
+    "author": {
+      "name": "Autor",
+      "url": "https://example.com",
+      "iconURL": "https://example.com/author.png"
+    },
+    "thumbnail": "https://example.com/thumbnail.png",
+    "image": "https://example.com/image.png",
+    "footer": {
+      "text": "Footer",
+      "iconURL": "https://example.com/footer.png"
+    },
+    "fields": [
+      { "name": "Campo 1", "value": "Valor 1", "inline": true },
+      { "name": "Campo 2", "value": "Valor 2", "inline": true },
+      { "name": "Campo 3", "value": "Valor 3" }
+    ]
+  }
+}
