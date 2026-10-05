@@ -34,8 +34,15 @@ const link = ({ discordId, robloxId, robloxUsername, robloxDisplayName = null, g
   }).immediate();
 };
 
+const beginNickname = (discordId, previousNickname) =>
+  database.get().prepare('UPDATE verifications SET nickname_managed = 2, previous_nickname = ? WHERE discord_id = ?').run(previousNickname, discordId);
+
 const manageNickname = (discordId, previousNickname) =>
-  database.get().prepare('UPDATE verifications SET nickname_managed = 1, previous_nickname = ? WHERE discord_id = ? AND nickname_managed = 0').run(previousNickname, discordId);
+  database.get().prepare('UPDATE verifications SET nickname_managed = 1, previous_nickname = ?, nickname_username = roblox_username WHERE discord_id = ?').run(previousNickname, discordId);
+
+const resetNickname = (discordId, { nickname_managed, previous_nickname, nickname_username }) =>
+  database.get().prepare('UPDATE verifications SET nickname_managed = ?, previous_nickname = ?, nickname_username = ? WHERE discord_id = ?')
+    .run(nickname_managed, previous_nickname, nickname_username, discordId);
 
 const purgeExpired = (now = Date.now()) =>
   database.get().prepare('DELETE FROM verifications WHERE expires_at IS NOT NULL AND expires_at <= ? RETURNING *').all(now);
@@ -43,4 +50,4 @@ const purgeExpired = (now = Date.now()) =>
 const removeExpiring = (discordId) =>
   database.get().prepare('DELETE FROM verifications WHERE discord_id = ? AND expires_at IS NOT NULL RETURNING *').get(discordId);
 
-module.exports = { findByDiscord, findByRoblox, link, manageNickname, purgeExpired, removeExpiring };
+module.exports = { findByDiscord, findByRoblox, link, beginNickname, manageNickname, resetNickname, purgeExpired, removeExpiring };

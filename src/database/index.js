@@ -170,6 +170,8 @@ const migrations = [
   `ALTER TABLE verifications ADD COLUMN nickname_managed INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE verifications ADD COLUMN previous_nickname TEXT;
   UPDATE verifications SET nickname_managed = 1 WHERE expires_at IS NOT NULL;`,
+  `ALTER TABLE verifications ADD COLUMN nickname_username TEXT;
+  UPDATE verifications SET nickname_username = roblox_username WHERE nickname_managed = 1;`,
 ];
 
 let db;

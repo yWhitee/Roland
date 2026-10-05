@@ -154,6 +154,22 @@ test('an existing version 8 database marks RoVer links so their nicknames are re
   database.open(file);
 });
 
+test('an existing version 9 database records which Roblox username managed nicknames show', () => {
+  const legacy = tempDatabase();
+  const db = new Database(legacy);
+  database.migrations.slice(0, 9).forEach((sql) => db.exec(sql));
+  db.pragma('user_version = 9');
+  db.prepare("INSERT INTO verifications (discord_id, roblox_id, roblox_username, verified_at, expires_at, nickname_managed) VALUES ('managed', '1', 'shown_name', 1, 2, 1)").run();
+  db.prepare("INSERT INTO verifications (discord_id, roblox_id, roblox_username, verified_at, expires_at, nickname_managed) VALUES ('unmanaged', '2', 'hidden_name', 1, 2, 0)").run();
+  db.close();
+
+  database.open(legacy);
+  assert.equal(database.get().pragma('user_version', { simple: true }), database.migrations.length);
+  const shown = Object.fromEntries(database.get().prepare('SELECT discord_id, nickname_username FROM verifications').all().map((row) => [row.discord_id, row.nickname_username]));
+  assert.deepEqual(shown, { managed: 'shown_name', unmanaged: null });
+  database.open(file);
+});
+
 test('punishment records survive a restart', () => {
   const ban = punishments.create({ type: 'ban', guildId: 'g', userId: 'u', moderatorId: 'm', reason: 'r', duration: '7d', expiresAt: 1000, active: true, channelId: 'c' });
   const clear = punishments.create({ type: 'clear', guildId: 'g', userId: 'u', moderatorId: 'm', channelId: 'c', metadata: { requested: 50, deleted: 42 } });

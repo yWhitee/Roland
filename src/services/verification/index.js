@@ -9,6 +9,8 @@ const { panelComponents, consentMessage, linkMessage, alreadyVerifiedEmbed, resu
 const MEMBER_ROLE = '1555596685462479048';
 const NICKNAME_LIMIT = 32;
 const ROBLOX_SUFFIX = / \(@[A-Za-z0-9_]{3,20}\)$/;
+const MANAGED = 1;
+const PENDING = 2;
 const COOLDOWN = 10_000;
 const RETENTION = 30 * 24 * 60 * 60_000;
 const CLEANUP_INTERVAL = 60 * 60_000;
@@ -71,42 +73,72 @@ const assignRole = async (guild, member) => {
   }
 };
 
-const updateNickname = async (guild, member, robloxUsername) => {
-  const nickname = buildNickname(member.user.globalName ?? member.user.username, robloxUsername);
-  const previous = ROBLOX_SUFFIX.test(member.nickname ?? '') ? null : member.nickname;
+const unmanaged = (nickname) => (ROBLOX_SUFFIX.test(nickname ?? '') ? null : nickname);
+
+const shows = (nickname, username) => Boolean(username && nickname?.endsWith(` (@${username})`));
+
+const showsManaged = (record, nickname) =>
+  shows(nickname, record.nickname_username) || (record.nickname_managed === PENDING && shows(nickname, record.roblox_username));
+
+const setManagedNickname = async (guild, member, record, previous) => {
+  const nickname = buildNickname(member.user.globalName ?? member.user.username, record.roblox_username);
   if (member.nickname === nickname) {
     verifications.manageNickname(member.id, previous);
     return { ok: true, nickname };
   }
   if (member.id === guild.ownerId) return { ok: false, reason: "Discord does not allow bots to change the server owner's nickname." };
+  verifications.beginNickname(member.id, previous);
   try {
     await member.setNickname(nickname, 'Roblox verification');
     verifications.manageNickname(member.id, previous);
     return { ok: true, nickname };
   } catch (error) {
+    verifications.resetNickname(member.id, record);
     console.error(`Failed to update the nickname of ${member.id}: ${error.message}`);
     return { ok: false, reason: failureReason(error, "The bot is missing the Manage Nicknames permission or your highest role is above the bot's.") };
   }
 };
 
+const updateNickname = async (guild, member, record, accountChanged) => {
+  if (record.nickname_managed === MANAGED && !showsManaged(record, member.nickname)) {
+    if (!accountChanged) {
+      verifications.resetNickname(member.id, { ...record, nickname_username: null });
+      return { ok: true, kept: true };
+    }
+    return setManagedNickname(guild, member, record, unmanaged(member.nickname));
+  }
+  return setManagedNickname(guild, member, record, record.nickname_managed ? record.previous_nickname : unmanaged(member.nickname));
+};
+
 const restoreNickname = async (guild, record) => {
   if (!guild || !record.nickname_managed) return;
   const member = await guild.members.fetch({ user: record.discord_id, force: true }).catch(() => null);
-  if (!member?.nickname?.endsWith(` (@${record.roblox_username})`) || member.id === guild.ownerId) return;
+  if (!member || !showsManaged(record, member.nickname) || member.id === guild.ownerId) return;
   await member.setNickname(record.previous_nickname, 'Roblox verification data removed').catch((error) => {
     console.error(`Failed to restore the nickname of ${member.id}: ${error.message}`);
   });
 };
 
-const applyMemberUpdates = async (guild, discordId, robloxUsername) => {
-  const member = await guild.members.fetch({ user: discordId, force: true }).catch((error) => {
+const applyMemberUpdates = async (guild, record, accountChanged) => {
+  const member = await guild.members.fetch({ user: record.discord_id, force: true }).catch((error) => {
     if (error.status === 404 || error.code === RESTJSONErrorCodes.UnknownMember) return null;
     throw error;
   });
   if (!member) return { member: null };
 
-  return { member, role: await assignRole(guild, member), nickname: await updateNickname(guild, member, robloxUsername) };
+  return { member, role: await assignRole(guild, member), nickname: await updateNickname(guild, member, record, accountChanged) };
 };
+
+const isValid = (record, now) => record.expires_at === null || record.expires_at > now;
+
+const handleJoin = (member, now = Date.now()) =>
+  serialize(member.id, async () => {
+    const record = verifications.findByDiscord(member.id);
+    if (!record || (record.guild_id && record.guild_id !== member.guild.id) || !isValid(record, now)) return null;
+    const role = await assignRole(member.guild, member);
+    const reapply = record.nickname_managed === PENDING || (record.nickname_managed === MANAGED && record.nickname_username);
+    return { role, nickname: reapply ? await setManagedNickname(member.guild, member, record, record.previous_nickname) : null };
+  });
 
 const result = (title, lines, success = false) => ({ embeds: [resultEmbed({ title, lines, success })], components: [] });
 
@@ -164,7 +196,11 @@ const describeUpdates = (updates) => {
   if (!updates.member) return ['You are no longer a member of the server, so the Member role and nickname could not be applied.'];
   return [
     updates.role.ok ? 'You have been given the Member role.' : `The Member role could not be assigned: ${updates.role.reason}`,
-    updates.nickname.ok ? 'Your server nickname has been updated.' : `Your nickname could not be updated: ${updates.nickname.reason}`,
+    updates.nickname.kept
+      ? 'Your server nickname was kept because you changed it.'
+      : updates.nickname.ok
+        ? 'Your server nickname has been updated.'
+        : `Your nickname could not be updated: ${updates.nickname.reason}`,
   ];
 };
 
@@ -221,7 +257,7 @@ const verify = async (interaction, replace, now, retry) => {
     return result('Verification failed', [`Your Discord account is already verified with another Roblox account (${verification.roblox_username}).`]);
   }
 
-  const updates = await applyMemberUpdates(interaction.guild, interaction.user.id, verification.roblox_username);
+  const updates = await applyMemberUpdates(interaction.guild, verification, status === 'relinked');
   if (status !== 'already-verified') await logging.sendEmbed(interaction.guild, logEmbed(verification, updates, Boolean(previous)));
 
   const titles = { linked: 'Verification successful', relinked: 'Roblox account updated', 'already-verified': 'You are already verified' };
@@ -236,7 +272,11 @@ const verify = async (interaction, replace, now, retry) => {
 
 const start = async (interaction, { replace = false, update = false, now = Date.now() } = {}) => {
   const existing = verifications.findByDiscord(interaction.user.id);
-  if (existing && !replace) return interaction.reply({ embeds: [alreadyVerifiedEmbed(existing)], flags: MessageFlags.Ephemeral });
+  if (existing && !replace) {
+    await interaction.reply({ embeds: [alreadyVerifiedEmbed(existing)], flags: MessageFlags.Ephemeral });
+    if (isValid(existing, now) && interaction.member) await assignRole(interaction.guild, interaction.member);
+    return undefined;
+  }
   if (!settings) throw new UserError('Roblox verification is not configured yet. Please contact a server administrator.');
   if (now < blockedUntil) throw new UserError(`RoVer is receiving too many requests. Please try again ${relative(blockedUntil)}.`);
   if (now - (lookups.get(interaction.user.id) ?? -Infinity) < COOLDOWN) throw new UserError('Please wait a few seconds before checking again.');
@@ -250,7 +290,11 @@ const start = async (interaction, { replace = false, update = false, now = Date.
 
 const cleanup = async (now = Date.now(), client = null) => {
   const expired = verifications.purgeExpired(now);
-  for (const record of expired) await restoreNickname(client?.guilds.cache.get(record.guild_id), record);
+  for (const record of expired) {
+    await serialize(record.discord_id, () =>
+      verifications.findByDiscord(record.discord_id) ? null : restoreNickname(client?.guilds.cache.get(record.guild_id), record),
+    );
+  }
   return expired.length;
 };
 
@@ -260,4 +304,4 @@ const startCleanup = (client) => {
   setInterval(run, CLEANUP_INTERVAL).unref();
 };
 
-module.exports = { MEMBER_ROLE, RETENTION, configure, isConfigured, publishPanel, start, buildNickname, cleanup, startCleanup };
+module.exports = { MEMBER_ROLE, RETENTION, configure, isConfigured, publishPanel, start, buildNickname, handleJoin, cleanup, startCleanup };

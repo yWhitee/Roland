@@ -58,7 +58,7 @@ const logEmbed = (verification, updates, changed = false) =>
     .addFields(
       { name: 'Discord user', value: `<@${verification.discord_id}> (\`${verification.discord_id}\`)` },
       { name: 'Member role', value: updates.role?.ok ? 'Assigned' : 'Not assigned', inline: true },
-      { name: 'Nickname', value: updates.nickname?.ok ? 'Updated' : 'Not updated', inline: true },
+      { name: 'Nickname', value: updates.nickname?.kept ? 'Kept' : updates.nickname?.ok ? 'Updated' : 'Not updated', inline: true },
       { name: 'Timestamp', value: fullTime(verification.verified_at) },
     )
     .setTimestamp(verification.verified_at);
