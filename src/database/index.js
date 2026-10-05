@@ -202,6 +202,16 @@ const migrations = [
   `ALTER TABLE punishments ADD COLUMN removed_at INTEGER;
   ALTER TABLE punishments ADD COLUMN removed_by TEXT;
   ALTER TABLE punishments ADD COLUMN removed_by_name TEXT;`,
+  `CREATE TABLE chatbot_channels (
+    guild_id TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    owner_user_id TEXT NOT NULL,
+    enabled INTEGER NOT NULL,
+    enabled_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (guild_id, channel_id)
+  );
+  CREATE INDEX chatbot_channels_owner ON chatbot_channels (guild_id, owner_user_id);`,
 ];
 
 let db;

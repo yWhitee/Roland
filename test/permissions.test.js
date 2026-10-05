@@ -64,6 +64,7 @@ test('command permission matrix', () => {
     leaderboard: ['member', 'support', 'moderator', 'senior', 'admin', 'owner'],
     levelset: ['admin', 'owner'],
     levelsystem: ['owner'],
+    chatbot: ['owner'],
     play: ['member', 'support', 'moderator', 'senior', 'admin', 'owner'],
   };
 

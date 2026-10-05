@@ -53,6 +53,10 @@ const Leveling = {
   SET: Level.ADMINISTRATOR,
 };
 
+const Chatbot = {
+  OWNER: Level.CREATOR,
+};
+
 const isAutomodImmune = (member) => getLevel(member) >= Automod.IMMUNE;
 
 const isTicketStaff = (member) => getLevel(member) >= Tickets.STAFF;
@@ -67,6 +71,7 @@ module.exports = {
   Tickets,
   Automod,
   Leveling,
+  Chatbot,
   getLevel,
   rolesAtLeast,
   assertCommand,

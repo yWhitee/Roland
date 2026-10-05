@@ -15,4 +15,8 @@ module.exports = {
   guildId: process.env.DISCORD_GUILD_ID,
   publicKey: process.env.DISCORD_PUBLIC_KEY,
   roverApiKey: process.env.ROVER_API_KEY,
+  ollama: {
+    url: process.env.OLLAMA_URL,
+    model: process.env.OLLAMA_MODEL,
+  },
 };

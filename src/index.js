@@ -6,6 +6,7 @@ const { resolveIntents } = require('./intents');
 const load = require('./loader');
 const presence = require('./presence');
 const automod = require('./services/automod');
+const chatbot = require('./services/chatbot');
 const verification = require('./services/verification');
 
 process.on('unhandledRejection', (error) => console.error('Unhandled rejection:', error));
@@ -30,6 +31,7 @@ const start = async () => {
     });
   }
 
+  chatbot.configure(config.ollama);
   if (!verification.configure({ apiKey: config.roverApiKey })) console.log('Roblox verification is disabled until ROVER_API_KEY is set.');
 
   await client.login(config.token);

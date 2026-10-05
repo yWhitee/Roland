@@ -1,5 +1,6 @@
 const { Events } = require('discord.js');
 const automod = require('../services/automod');
+const chatbot = require('../services/chatbot');
 const levels = require('../services/levels');
 const noMessages = require('../services/noMessages');
 
@@ -11,7 +12,10 @@ module.exports = {
       console.error('AutoMod failed to process a message:', error);
       return null;
     });
-    if (!violation && !deleting) await levels.handleMessage(message);
+    if (!violation && !deleting) {
+      await levels.handleMessage(message);
+      await chatbot.handleMessage(message);
+    }
     await deleting;
   },
 };
