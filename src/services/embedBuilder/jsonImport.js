@@ -70,7 +70,7 @@ const reader = (errors) => {
     if (value === undefined || value === null || value === '') return '';
     if (Number.isInteger(value) && value >= 0 && value <= 0xffffff) return `#${value.toString(16).padStart(6, '0')}`;
     if (typeof value === 'string' && /^#?[0-9a-f]{6}$/i.test(value.trim())) return `#${value.trim().replace('#', '')}`;
-    errors.push(`${path} must be a hex color like "#5865F2" or a number from 0 to 16777215.`);
+    errors.push(`${path} must be a hex color like "#FF7B00" or a number from 0 to 16777215.`);
     return '';
   };
 

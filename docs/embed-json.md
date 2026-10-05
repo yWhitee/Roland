@@ -65,7 +65,7 @@ Veja [`embed-example.json`](embed-example.json):
     "title": "Título",
     "url": "https://example.com",
     "description": "Descrição com **markdown** do Discord.",
-    "color": "#5865F2",
+    "color": "#FF7B00",
     "timestamp": true,
     "author": { "name": "Autor", "url": "https://example.com", "iconURL": "https://example.com/author.png" },
     "thumbnail": "https://example.com/thumbnail.png",

@@ -23,7 +23,7 @@ const SECTIONS = {
       ['title', 'Title', { max: 256 }],
       ['url', 'Title URL', { max: 2000 }],
       ['description', 'Description', { max: 4000, style: TextInputStyle.Paragraph }],
-      ['color', 'Color (hex)', { max: 7, placeholder: '#5865F2' }],
+      ['color', 'Color (hex)', { max: 7, placeholder: '#FF7B00' }],
     ],
   },
   author: {

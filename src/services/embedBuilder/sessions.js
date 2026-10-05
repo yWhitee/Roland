@@ -101,7 +101,7 @@ const problems = (state) => {
   for (const [key, label] of Object.entries(URL_KEYS)) {
     if (state[key] && (state[key].length > MAX_URL || !isUrl(state[key]))) found.push(`${label} must be a valid URL starting with http:// or https:// (at most ${MAX_URL} characters).`);
   }
-  if (state.color && !/^#?[0-9a-f]{6}$/i.test(state.color)) found.push('Invalid color. Use a hex code, e.g. #5865F2.');
+  if (state.color && !/^#?[0-9a-f]{6}$/i.test(state.color)) found.push('Invalid color. Use a hex code, e.g. #FF7B00.');
   if (state.url && !state.title) found.push('Set a title before adding a title URL.');
   if ((state.authorIcon || state.authorUrl) && !state.authorName) found.push('Set an author name before adding an author icon or URL.');
   if (state.footerIcon && !state.footer) found.push('Set footer text before adding a footer icon.');

@@ -124,7 +124,7 @@ test('a complete paste fills the editor and its preview, can be edited and is se
   assert.equal(embed.title, 'Título');
   assert.equal(embed.url, 'https://example.com');
   assert.equal(embed.description, 'Descrição com **markdown** do Discord.');
-  assert.equal(embed.color, 0x5865f2);
+  assert.equal(embed.color, 0xff7b00);
   assert.deepEqual(embed.author, { name: 'Autor', url: 'https://example.com', icon_url: 'https://example.com/author.png' });
   assert.equal(embed.thumbnail.url, 'https://example.com/thumbnail.png');
   assert.equal(embed.image.url, 'https://example.com/image.png');
