@@ -2,7 +2,9 @@ const { EmbedBuilder, escapeMarkdown } = require('discord.js');
 const automodFunctions = require('../services/automod/functions');
 const { formatDuration } = require('./duration');
 
-const Colors = { error: 0xed4245, success: 0x57f287, info: 0x5865f2, warning: 0xfee75c };
+const DEFAULT_EMBED_COLOR = 0xff7b00;
+
+const Colors = { error: 0xed4245, success: 0x57f287, info: DEFAULT_EMBED_COLOR, warning: 0xfee75c };
 
 const ACTIONS = {
   ban: { label: 'Ban', color: 0xed4245, emoji: '🔨' },
@@ -122,4 +124,4 @@ const errorEmbed = (message) => new EmbedBuilder().setColor(Colors.error).setDes
 
 const successEmbed = (message) => new EmbedBuilder().setColor(Colors.success).setDescription(`✅ ${message}`);
 
-module.exports = { ACTIONS, Colors, time, describe, recordLabel, recordName, recordEmbed, caseEmbed, caseRemovedEmbed, casesRemovedEmbed, noticeEmbed, withDmStatus, errorEmbed, successEmbed };
+module.exports = { DEFAULT_EMBED_COLOR, ACTIONS, Colors, time, describe, recordLabel, recordName, recordEmbed, caseEmbed, caseRemovedEmbed, casesRemovedEmbed, noticeEmbed, withDmStatus, errorEmbed, successEmbed };

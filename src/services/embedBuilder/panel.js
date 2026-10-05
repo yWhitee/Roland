@@ -14,6 +14,7 @@ const {
 } = require('discord.js');
 const { MAX_BYTES, MAX_PASTE } = require('./jsonImport');
 const { MAX_FIELDS, toEmbed, isEmpty } = require('./sessions');
+const { DEFAULT_EMBED_COLOR } = require('../../utils/embeds');
 
 const SECTIONS = {
   body: {
@@ -113,7 +114,7 @@ const panel = (session, view = 'main', notice = null) => {
   if (state.content) lines.push('', '**Message content:**', state.content.length > 1500 ? `${state.content.slice(0, 1500)}…` : state.content);
 
   const preview = isEmpty(state)
-    ? new EmbedBuilder().setDescription('*The embed is empty. Use the buttons below to configure it.*')
+    ? new EmbedBuilder().setColor(DEFAULT_EMBED_COLOR).setDescription('*The embed is empty. Use the buttons below to configure it.*')
     : toEmbed(state);
 
   return { content: lines.join('\n'), embeds: [preview], components: components(session, view), allowedMentions: { parse: [] } };

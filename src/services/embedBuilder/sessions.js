@@ -1,4 +1,5 @@
 const { EmbedBuilder, embedLength } = require('discord.js');
+const { DEFAULT_EMBED_COLOR } = require('../../utils/embeds');
 const { UserError } = require('../../utils/errors');
 
 const TTL = 30 * 60_000;
@@ -79,11 +80,10 @@ const isUrl = (value) => {
 };
 
 const toEmbed = (state, timestamp = Date.now()) => {
-  const embed = new EmbedBuilder();
+  const embed = new EmbedBuilder().setColor(state.color ? parseInt(state.color.replace('#', ''), 16) : DEFAULT_EMBED_COLOR);
   if (state.title) embed.setTitle(state.title);
   if (state.url) embed.setURL(state.url);
   if (state.description) embed.setDescription(state.description);
-  if (state.color) embed.setColor(parseInt(state.color.replace('#', ''), 16));
   if (state.authorName) embed.setAuthor({ name: state.authorName, iconURL: state.authorIcon || undefined, url: state.authorUrl || undefined });
   if (state.thumbnail) embed.setThumbnail(state.thumbnail);
   if (state.image) embed.setImage(state.image);
