@@ -212,6 +212,17 @@ const migrations = [
     PRIMARY KEY (guild_id, channel_id)
   );
   CREATE INDEX chatbot_channels_owner ON chatbot_channels (guild_id, owner_user_id);`,
+  `CREATE TABLE chatbot_permissions (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    updated_by TEXT NOT NULL,
+    PRIMARY KEY (guild_id, user_id)
+  );
+  ALTER TABLE chatbot_channels ADD COLUMN bypass_enabled INTEGER NOT NULL DEFAULT 0 CHECK (bypass_enabled IN (0, 1));
+  ALTER TABLE chatbot_channels ADD COLUMN bypass_updated_by TEXT;`,
 ];
 
 let db;

@@ -13,7 +13,7 @@ const { makeMember, tempDatabase } = require('./helpers/discord');
 const commands = load(path.join(__dirname, '..', 'src', 'commands'));
 const components = load(path.join(__dirname, '..', 'src', 'components'));
 const EXPECTED = [
-  'automod', 'automodlist', 'automodwhitelist', 'ban', 'case', 'caseremove', 'chatbot', 'clear', 'createverify', 'embed', 'kick', 'leaderboard', 'level',
+  'automod', 'automodlist', 'automodwhitelist', 'ban', 'case', 'caseremove', 'chatbot', 'chatbotbypass', 'chatbotperm', 'clear', 'createverify', 'embed', 'kick', 'leaderboard', 'level',
   'levelset', 'levelsystem', 'logs', 'modlog', 'mute', 'nomessages', 'ping', 'ticketcreate', 'unban', 'unmute', 'verify', 'verifyinfo', 'warn',
 ];
 
@@ -26,7 +26,7 @@ test('every command loads and builds valid JSON', () => {
   assert.deepEqual(names.sort(), [...EXPECTED, 'play'].sort());
   for (const command of commands) {
     assert.equal(typeof command.execute, 'function', command.data.name);
-    if (!['ping', 'verify', 'level', 'leaderboard', 'play'].includes(command.data.name)) assert.ok(command.level > 0, command.data.name);
+    if (!['ping', 'verify', 'level', 'leaderboard', 'play', 'chatbot', 'chatbotperm', 'chatbotbypass'].includes(command.data.name)) assert.ok(command.level > 0, command.data.name);
   }
 });
 

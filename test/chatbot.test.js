@@ -12,6 +12,7 @@ const interactionCreate = require('../src/events/interactionCreate');
 const messageCreate = require('../src/events/messageCreate');
 const chatbot = require('../src/services/chatbot');
 const noMessages = require('../src/services/noMessages');
+const chatbotAccess = require('../src/services/chatbotPermissions');
 const { ROLES } = require('../src/permissions');
 const { BOT_ID, makeGuild, makeInteraction, makeMember, snowflake, tempDatabase } = require('./helpers/discord');
 
@@ -20,14 +21,17 @@ const URL = 'http://127.0.0.1:11434';
 let clock = Date.UTC(2026, 9, 1, 12);
 const tick = () => (clock += 1000);
 
-const ollama = (handler = ({ prompt }) => ({ response: `Answer to: ${prompt.split('\n\n').at(-2).slice('User: '.length)}` })) => {
+const lastUser = (body) => [...body.messages].reverse().find((entry) => entry.role === 'user').content;
+
+const ollama = (handler = (body) => ({ content: `Answer to: ${lastUser(body)}` })) => {
   const requests = [];
   const fetch = async (url, options) => {
     const body = JSON.parse(options.body);
     requests.push({ url, method: options.method, body, raw: options.body });
-    const result = await handler(body, options);
+    const result = await handler({ ...body, prompt: lastUser(body) }, options);
     if (result instanceof Response) return result;
-    return new Response(JSON.stringify(result), { status: 200, headers: { 'content-type': 'application/json' } });
+    const payload = 'content' in result || 'tool_calls' in result ? { message: { role: 'assistant', ...result } } : result;
+    return new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } });
   };
   chatbot.configure({ url: URL, model: 'qwen3:1.7b', fetch, timeout: 200 });
   return requests;
@@ -43,9 +47,16 @@ test.after(() => database.close());
 const setup = async () => {
   const guild = makeGuild();
   const channel = await guild.channels.create({ name: 'chatbot' });
-  const owner = makeMember(ROLES.CREATOR);
+  const owner = makeMember(null);
+  guild.ownerId = owner.id;
   guild.members.cache.set(owner.id, owner);
   return { guild, channel, owner };
+};
+
+const authorize = (guild, member) => {
+  guild.members.cache.set(member.id, member);
+  chatbotAccess.setPermission({ guild, userId: member.id, enabled: true, updatedBy: guild.ownerId });
+  return member;
 };
 
 const toggle = async (guild, member, channel, state) => {
@@ -100,9 +111,9 @@ const quiet = async (task) => {
 
 const rows = (guild, channel) => database.get().prepare('SELECT * FROM chatbot_channels WHERE guild_id = ? AND channel_id = ?').all(guild.id, channel.id);
 
-test('only an Owner can run /chatbot, through the central permission levels', async () => {
+test('only the server owner and users allowed with /chatbotperm can run /chatbot; roles never grant access', async () => {
   ollama();
-  const { guild, channel } = await setup();
+  const { guild, channel, owner } = await setup();
   const route = async (member, state) => {
     const answers = [];
     await interactionCreate.execute({
@@ -121,14 +132,14 @@ test('only an Owner can run /chatbot, through the central permission levels', as
     });
     return answers.at(-1);
   };
-  for (const role of [null, ROLES.SUPPORT, ROLES.MODERATOR, ROLES.SENIOR_MODERATOR, ROLES.ADMINISTRATOR]) {
-    assert.match(await route(makeMember(role), 'on'), /do not have permission/);
+  for (const role of [null, ROLES.SUPPORT, ROLES.MODERATOR, ROLES.SENIOR_MODERATOR, ROLES.ADMINISTRATOR, ROLES.CREATOR]) {
+    assert.match(await route(makeMember(role), 'on'), /do not have access to the chatbot/);
   }
   assert.equal(rows(guild, channel).length, 0);
-  const owner = makeMember(ROLES.CREATOR);
   assert.match(await route(owner, 'on'), /now enabled/);
-  assert.match(await route(makeMember(ROLES.ADMINISTRATOR), 'off'), /do not have permission/);
+  assert.match(await route(makeMember(ROLES.ADMINISTRATOR), 'off'), /do not have access to the chatbot/);
   assert.match(await route(owner, 'off'), /has ended/);
+  assert.match(await route(authorize(guild, makeMember(null)), 'on'), /now enabled/);
 });
 
 test('/chatbot on starts a session for that Owner in the current channel only', async () => {
@@ -153,16 +164,18 @@ test('a second /chatbot on never duplicates or takes over a session', async () =
   const { guild, channel, owner } = await setup();
   await toggle(guild, owner, channel, 'on');
   await assert.rejects(toggle(guild, owner, channel, 'on'), /Your chatbot session is already active/);
-  const rival = makeMember(ROLES.CREATOR);
+  const rival = authorize(guild, makeMember(ROLES.ADMINISTRATOR));
   await assert.rejects(toggle(guild, rival, channel, 'on'), new RegExp(`already has a chatbot session owned by <@${owner.id}>`));
   assert.equal(rows(guild, channel).length, 1);
   assert.equal(chatbot.ownerOf(channel.id), owner.id);
 
-  assert.match(await toggle(guild, rival, channel, 'off'), new RegExp(`session of <@${owner.id}> .* has ended`));
-  await assert.rejects(toggle(guild, rival, channel, 'off'), /already disabled/);
+  await assert.rejects(toggle(guild, rival, channel, 'off'), new RegExp(`This session belongs to <@${owner.id}>`));
+  assert.match(await toggle(guild, owner, channel, 'off'), new RegExp(`session of <@${owner.id}> .* has ended`));
+  await assert.rejects(toggle(guild, owner, channel, 'off'), /already disabled/);
   await toggle(guild, rival, channel, 'on');
   assert.equal(chatbot.ownerOf(channel.id), rival.id, 'a new session after /chatbot off');
   assert.equal(rows(guild, channel).length, 1);
+  assert.match(await toggle(guild, owner, channel, 'off'), new RegExp(`session of <@${rival.id}> .* has ended`), 'the server owner can end any session');
 });
 
 test('/chatbot off ends only the session of the current channel', async () => {
@@ -190,7 +203,7 @@ test('only the session owner is answered; everyone else never reaches Ollama or 
 
   await say(guild, channel, owner, 'hello');
   assert.equal(requests.length, 1);
-  assert.doesNotMatch(requests[0].body.prompt, /secret/);
+  assert.doesNotMatch(JSON.stringify(requests[0].body.messages), /secret/);
 });
 
 test('sessions survive a restart with the same owner', async () => {
@@ -212,7 +225,7 @@ test('sessions survive a restart with the same owner', async () => {
 });
 
 test('Roland, other bots, empty messages and empty answers never produce messages', async () => {
-  const requests = ollama(({ prompt }) => ({ response: prompt.includes('blank') ? '   ' : 'ok' }));
+  const requests = ollama(({ prompt }) => ({ content: prompt.includes('blank') ? '   ' : 'ok' }));
   const { guild, channel, owner } = await setup();
   await toggle(guild, owner, channel, 'on');
   const roland = makeMember(null);
@@ -236,7 +249,7 @@ test('Roland, other bots, empty messages and empty answers never produce message
 
 test('long answers are split at word boundaries within the Discord limit', async () => {
   const long = Array.from({ length: 900 }, (_, index) => `word${index}`).join(' ');
-  ollama(() => ({ response: long }));
+  ollama(() => ({ content: long }));
   const { guild, channel, owner } = await setup();
   await toggle(guild, owner, channel, 'on');
   await say(guild, channel, owner, 'tell me a lot');
@@ -253,39 +266,44 @@ test('the conversation keeps context per session, and a limited history', async 
   const requests = ollama();
   const { guild, channel, owner } = await setup();
   const second = await guild.channels.create({ name: 'other-session' });
-  const otherOwner = makeMember(ROLES.CREATOR);
+  const otherOwner = authorize(guild, makeMember(null));
   await toggle(guild, owner, channel, 'on');
   await toggle(guild, otherOwner, second, 'on');
 
   await say(guild, channel, owner, 'What is a black hole?');
   await say(guild, second, otherOwner, 'What is a star?');
   await say(guild, channel, owner, 'How does it form?');
-  const followUp = requests.at(-1).body.prompt;
-  assert.equal(followUp, 'User: What is a black hole?\n\nRoland: Answer to: What is a black hole?\n\nUser: How does it form?\n\nRoland:');
-  assert.doesNotMatch(followUp, /star/, 'other channels and users are not shared');
-  assert.equal(requests[1].body.prompt, 'User: What is a star?\n\nRoland:');
+  const followUp = requests.at(-1).body.messages;
+  assert.deepEqual(followUp.slice(1), [
+    { role: 'user', content: 'What is a black hole?' },
+    { role: 'assistant', content: 'Answer to: What is a black hole?' },
+    { role: 'user', content: 'How does it form?' },
+  ]);
+  assert.doesNotMatch(JSON.stringify(followUp), /star/, 'other channels and users are not shared');
+  assert.deepEqual(requests[1].body.messages.slice(1), [{ role: 'user', content: 'What is a star?' }]);
 
   for (let index = 0; index < 10; index++) await say(guild, channel, owner, `question ${index}`);
-  const last = requests.at(-1).body.prompt;
-  assert.doesNotMatch(last, /black hole/, 'old turns are dropped');
-  assert.equal(last.split('\n\n').filter((line) => line.startsWith('User: ')).length, 7, '6 previous turns plus the new message');
+  const last = requests.at(-1).body.messages;
+  assert.doesNotMatch(JSON.stringify(last), /black hole/, 'old turns are dropped');
+  assert.equal(last.filter((entry) => entry.role === 'user').length, 7, '6 previous turns plus the new message');
 });
 
 test('the request uses the local Ollama, the configured model and no credentials', async () => {
   process.env.DISCORD_TOKEN = 'discord-secret-token';
   process.env.ROVER_API_KEY = 'rover-secret-key';
-  const requests = ollama(() => ({ response: 'Visible answer', thinking: 'secret reasoning' }));
+  const requests = ollama(() => ({ content: 'Visible answer', thinking: 'secret reasoning' }));
   const { guild, channel, owner } = await setup();
   await toggle(guild, owner, channel, 'on');
   await say(guild, channel, owner, 'hello');
 
   const [request] = requests;
-  assert.equal(request.url, `${URL}/api/generate`);
+  assert.equal(request.url, `${URL}/api/chat`);
   assert.equal(request.method, 'POST');
-  assert.deepEqual(Object.keys(request.body).sort(), ['model', 'options', 'prompt', 'stream', 'system', 'think']);
+  assert.deepEqual(Object.keys(request.body).sort(), ['messages', 'model', 'options', 'stream', 'think', 'tools']);
   assert.deepEqual([request.body.model, request.body.stream, request.body.think], ['qwen3:1.7b', false, false]);
-  assert.equal(request.body.system, chatbot.SYSTEM_PROMPT);
-  assert.match(chatbot.SYSTEM_PROMPT, /can only chat/);
+  assert.deepEqual(request.body.options, { num_predict: 512, num_ctx: 8192 });
+  assert.deepEqual(request.body.messages[0], { role: 'system', content: `${chatbot.SYSTEM_PROMPT} ${chatbot.OWNER_NOTE}` });
+  assert.match(chatbot.SYSTEM_PROMPT, /checks every permission itself/);
   for (const secret of ['discord-secret-token', 'rover-secret-key']) assert.ok(!request.raw.includes(secret));
   assert.deepEqual(replies(channel), ['Visible answer']);
   assert.deepEqual([chatbot.DEFAULT_URL, chatbot.DEFAULT_MODEL], ['http://127.0.0.1:11434', 'qwen3:1.7b']);
@@ -293,7 +311,7 @@ test('the request uses the local Ollama, the configured model and no credentials
 
 test('thinking is never sent to Discord', async () => {
   ollama(({ prompt }) => ({
-    response: prompt.includes('unclosed') ? '<think>still reasoning' : '<think>private chain of thought</think>\n\nThe real answer.',
+    content: prompt.includes('unclosed') ? '<think>still reasoning' : '<think>private chain of thought</think>\n\nThe real answer.',
     thinking: 'more private reasoning',
   }));
   const { guild, channel, owner } = await setup();
@@ -305,7 +323,7 @@ test('thinking is never sent to Discord', async () => {
 });
 
 test('a message that looks like a command is only chat and pings nobody', async () => {
-  ollama(() => ({ response: 'Done! I banned them @everyone' }));
+  ollama(() => ({ content: 'Done! I banned them @everyone' }));
   const { guild, channel, owner } = await setup();
   const victim = makeMember(null);
   guild.members.cache.set(victim.id, victim);
@@ -365,11 +383,11 @@ test('/nomessages, AutoMod and XP keep working in a chatbot channel', async () =
   assert.equal(requests.length, 1, 'no chat in a no-messages channel');
 });
 
-test('a session ends when its owner leaves or loses the Owner role', async () => {
+test('a session ends when its owner leaves or loses chatbot access', async () => {
   const requests = ollama();
   const { guild, channel, owner } = await setup();
   const second = await guild.channels.create({ name: 'second' });
-  const otherOwner = makeMember(ROLES.CREATOR);
+  const otherOwner = authorize(guild, makeMember(ROLES.CREATOR));
   await toggle(guild, owner, channel, 'on');
   await toggle(guild, otherOwner, second, 'on');
 
@@ -378,17 +396,17 @@ test('a session ends when its owner leaves or loses the Owner role', async () =>
   assert.equal(rows(guild, channel)[0].enabled, 0);
   assert.equal(chatbot.ownerOf(second.id), otherOwner.id, 'other sessions are untouched');
 
-  otherOwner.roles.cache.delete(ROLES.CREATOR);
-  const { lines } = await quiet(() => say(guild, second, otherOwner, 'still the owner?'));
+  chatbotAccess.setPermission({ guild, userId: otherOwner.id, enabled: false, updatedBy: guild.ownerId });
+  const { lines } = await quiet(() => say(guild, second, otherOwner, 'still allowed?'));
   assert.equal(requests.length, 0);
   assert.equal(chatbot.ownerOf(second.id), null);
-  assert.match(lines[0], /no longer has the Owner role/);
+  assert.match(lines[0], /no longer has chatbot access/);
 });
 
 test('turning the chatbot off while it is thinking discards the answer', async () => {
   let release;
   const gate = new Promise((resolve) => (release = resolve));
-  ollama(async () => (await gate, { response: 'late answer' }));
+  ollama(async () => (await gate, { content: 'late answer' }));
   const { guild, channel, owner } = await setup();
   await toggle(guild, owner, channel, 'on');
   const pending = say(guild, channel, owner, 'slow question');
@@ -409,7 +427,7 @@ test('requests run one at a time and a full queue answers busy once', async () =
     active++;
     await gate;
     active--;
-    return { response: `ok ${prompt.length}` };
+    return { content: `ok ${prompt.length}` };
   });
   const { guild, channel, owner } = await setup();
   await toggle(guild, owner, channel, 'on');
@@ -433,7 +451,7 @@ test('an existing database gains the chatbot_channels table', () => {
   try {
     assert.equal(database.get().pragma('user_version', { simple: true }), database.migrations.length);
     const columns = database.get().prepare('PRAGMA table_info(chatbot_channels)').all().map((column) => column.name);
-    assert.deepEqual(columns, ['guild_id', 'channel_id', 'owner_user_id', 'enabled', 'enabled_at', 'updated_at']);
+    assert.deepEqual(columns, ['guild_id', 'channel_id', 'owner_user_id', 'enabled', 'enabled_at', 'updated_at', 'bypass_enabled', 'bypass_updated_by']);
     assert.equal(database.get().prepare('SELECT COUNT(*) AS total FROM no_messages').get().total, 1);
   } finally {
     database.open(file);

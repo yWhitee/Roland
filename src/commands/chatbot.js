@@ -1,11 +1,10 @@
 const { MessageFlags, SlashCommandBuilder } = require('discord.js');
-const { Chatbot } = require('../permissions');
 const chatbot = require('../services/chatbot');
+const chatbotAccess = require('../services/chatbotPermissions');
 const { successEmbed } = require('../utils/embeds');
 const { UserError } = require('../utils/errors');
 
 module.exports = {
-  level: Chatbot.OWNER,
   data: new SlashCommandBuilder()
     .setName('chatbot')
     .setDescription('Start or stop your private chatbot session in this channel')
@@ -18,12 +17,17 @@ module.exports = {
     ),
   async execute(interaction) {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    const channel = interaction.channel ?? (await interaction.guild.channels.fetch(interaction.channelId).catch(() => null));
+    const access = chatbotAccess.assertChatbotAccess(interaction);
+    const channel = interaction.channel ?? (await interaction.guild.channels.fetch(interaction.channelId));
     if (!channel?.isTextBased() || channel.guild?.id !== interaction.guild.id) throw new UserError('The chatbot can only be used in a text channel of this server.');
     const now = interaction.createdTimestamp;
 
     if (interaction.options.getString('state', true) === 'off') {
-      const session = chatbot.disable({ guild: interaction.guild, channel, now });
+      const current = chatbot.sessionIn(channel.id);
+      if (current && current.ownerId !== interaction.user.id && access !== chatbotAccess.ACCESS.SERVER_OWNER) {
+        throw new UserError(`This session belongs to <@${current.ownerId}>. Only they or the server owner can end it.`);
+      }
+      const session = await chatbot.disable({ guild: interaction.guild, channel, now });
       if (!session) throw new UserError(`The chatbot is already disabled in ${channel}.`);
       return interaction.editReply({ embeds: [successEmbed(`The chatbot session of <@${session.owner_user_id}> in ${channel} has ended.`)] });
     }
@@ -37,5 +41,9 @@ module.exports = {
     return interaction.editReply({
       embeds: [successEmbed(`The chatbot is now enabled in ${channel}. I will only answer your messages here; everyone else is ignored.`)],
     });
+  },
+  handleComponent: (interaction) => {
+    const [, decision, id] = interaction.customId.split(':');
+    return chatbot.handleDecision(interaction, decision, id);
   },
 };
