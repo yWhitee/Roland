@@ -7,6 +7,8 @@ const PANEL = {
   color: '#335FFF',
 };
 
+const ROVER_VERIFY_URL = 'https://rover.link/verify/';
+
 const fullTime = (ms) => `<t:${Math.floor(ms / 1000)}:F>`;
 
 const profileUrl = (robloxId) => `https://www.roblox.com/users/${robloxId}/profile`;
@@ -19,11 +21,20 @@ const panelComponents = () => [
   ),
 ];
 
+const checkButton = (relink) =>
+  new ButtonBuilder().setCustomId(relink ? 'verify:check:relink' : 'verify:check').setLabel('Check again').setEmoji('🔄').setStyle(ButtonStyle.Primary);
+
 const consentMessage = (lines, relink = false) => ({
   embeds: [new EmbedBuilder().setColor(Colors.info).setTitle('Verify with Roblox').setDescription(lines.join('\n'))],
+  components: [new ActionRowBuilder().addComponents(checkButton(relink))],
+});
+
+const linkMessage = (lines, relink = false) => ({
+  embeds: [new EmbedBuilder().setColor(Colors.info).setTitle(PANEL.title).setDescription(lines.join('\n'))],
   components: [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(relink ? 'verify:check:relink' : 'verify:check').setLabel('Check again').setEmoji('🔄').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setLabel('Verify with Roblox').setEmoji('🔗').setStyle(ButtonStyle.Link).setURL(ROVER_VERIFY_URL),
+      checkButton(relink),
     ),
   ],
 });
@@ -63,4 +74,4 @@ const infoEmbed = (user, verification) => {
   );
 };
 
-module.exports = { PANEL, panelEmbed, panelComponents, consentMessage, alreadyVerifiedEmbed, resultEmbed, logEmbed, infoEmbed };
+module.exports = { PANEL, ROVER_VERIFY_URL, panelEmbed, panelComponents, consentMessage, linkMessage, alreadyVerifiedEmbed, resultEmbed, logEmbed, infoEmbed };

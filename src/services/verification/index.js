@@ -4,7 +4,7 @@ const verifications = require('../../database/verifications');
 const logging = require('../logging');
 const { UserError } = require('../../utils/errors');
 const rover = require('./rover');
-const { panelComponents, consentMessage, alreadyVerifiedEmbed, resultEmbed, logEmbed } = require('./messages');
+const { panelComponents, consentMessage, linkMessage, alreadyVerifiedEmbed, resultEmbed, logEmbed } = require('./messages');
 
 const MEMBER_ROLE = '1555596685462479048';
 const NICKNAME_LIMIT = 32;
@@ -122,11 +122,30 @@ const NOTICES = {
     'Your Roblox account is only shared with this server if you allow it.',
   ],
   pending: ['RoVer already sent you an authorization request.', '', 'Open the DM from **RoVer**, click **Allow**, then click **Check again**.'],
-  user_not_found: ['RoVer did not find a Roblox account linked to your Discord account.', '', 'Verify your account with the **RoVer** bot, then click **Check again**.'],
   dm_unreachable: [
     'RoVer could not send you a direct message with the authorization request.',
     '',
     'Allow direct messages from this server and make sure you can receive messages from **RoVer**, then click **Check again**.',
+  ],
+};
+
+const NOT_LINKED = {
+  first: [
+    'Your Discord account is not linked to a Roblox account yet.',
+    '',
+    '**To continue:**',
+    '1. Click **Verify with Roblox** below.',
+    '2. Complete the Roblox verification on the official RoVer website.',
+    '3. Return to this server.',
+    '4. Click **Check again**.',
+    '',
+    'Your Roblox account will only be linked to Roland after you complete the verification.',
+  ],
+  again: [
+    "We still couldn't find a Roblox account linked to your Discord account.",
+    '',
+    "If you haven't completed the verification yet, click **Verify with Roblox** below.",
+    'After completing it, return here and click **Check again**.',
   ],
 };
 
@@ -149,8 +168,9 @@ const describeUpdates = (updates) => {
   ];
 };
 
-const failure = (error, replace, now) => {
+const failure = (error, replace, now, retry) => {
   if (!(error instanceof rover.RoverError)) throw error;
+  if (error.kind === 'user_not_found') return linkMessage(retry ? NOT_LINKED.again : NOT_LINKED.first, replace);
   if (NOTICES[error.kind]) return consentMessage(NOTICES[error.kind], replace);
   if (error.kind === 'rate_limited') {
     blockedUntil = Math.max(blockedUntil, now + error.retryAfter);
@@ -172,12 +192,12 @@ const find = async (guild, discordId) => {
   return access === 'authorized' ? { account: await rover.lookup(settings, guild.id, discordId) } : { access };
 };
 
-const verify = async (interaction, replace, now) => {
+const verify = async (interaction, replace, now, retry) => {
   let found;
   try {
     found = await find(interaction.guild, interaction.user.id);
   } catch (error) {
-    return failure(error, replace, now);
+    return failure(error, replace, now, retry);
   }
   if (found.access) return consentMessage(NOTICES[found.access], replace);
   const { account } = found;
@@ -225,7 +245,7 @@ const start = async (interaction, { replace = false, update = false, now = Date.
   setTimeout(() => lookups.get(interaction.user.id) === now && lookups.delete(interaction.user.id), COOLDOWN).unref();
 
   await (update ? interaction.deferUpdate() : interaction.deferReply({ flags: MessageFlags.Ephemeral }));
-  return interaction.editReply(await serialize(interaction.user.id, () => verify(interaction, replace, now)));
+  return interaction.editReply(await serialize(interaction.user.id, () => verify(interaction, replace, now, update)));
 };
 
 const cleanup = async (now = Date.now(), client = null) => {

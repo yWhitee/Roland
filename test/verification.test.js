@@ -612,7 +612,7 @@ test('access request already_authorized: the account is looked up again right aw
   const stuck = makeInteraction({ guild: other, member: join(other) });
   await verification.start(stuck, { now: later() });
   assert.deepEqual(methods(unlinked), ['GET', 'PUT', 'GET'], 'no loop when RoVer has no account');
-  assert.match(embedOf(stuck.calls.replies[0]).description, /RoVer did not find a Roblox account linked to your Discord account/);
+  assert.match(embedOf(stuck.calls.replies[0]).description, /^Your Discord account is not linked to a Roblox account yet\./);
 });
 
 test('a member who allows the request is verified on Check again with the Roblox ID and username from RoVer', async () => {
@@ -909,4 +909,107 @@ test('cleanup keeps nicknames changed by the member and survives members who lef
   verification.startCleanup(clientFor(guild));
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(soon.nickname, 'Soon', 'the scheduled cleanup restores nicknames too');
+});
+
+const ROVER_VERIFY = 'https://rover.link/verify/';
+
+const unlinked = (rover) => {
+  rover.failure = (method) =>
+    rover.linked ? null : method === 'GET' ? { status: 404, body: { errorCode: 'user_not_found', message: 'User not found' } } : { status: 200, body: { status: 'already_authorized' } };
+};
+
+test('an account without a Roblox link gets Roland instructions with the official RoVer link, not an error', async () => {
+  const { guild, rover } = setup();
+  unlinked(rover);
+  const member = join(guild);
+  member.nickname = 'Untouched';
+
+  const interaction = makeInteraction({ guild, member });
+  const { lines } = await quiet(() => verification.start(interaction, { now: later() }));
+  const reply = interaction.calls.replies[0];
+  const embed = embedOf(reply);
+  assert.ok(interaction.calls.deferred.flags, 'private reply');
+  assert.equal(interaction.calls.replies.length, 1, 'no other message');
+  assert.equal(embed.title, 'Roblox Verification');
+  assert.equal(embed.description, [
+    'Your Discord account is not linked to a Roblox account yet.',
+    '',
+    '**To continue:**',
+    '1. Click **Verify with Roblox** below.',
+    '2. Complete the Roblox verification on the official RoVer website.',
+    '3. Return to this server.',
+    '4. Click **Check again**.',
+    '',
+    'Your Roblox account will only be linked to Roland after you complete the verification.',
+  ].join('\n'));
+  assert.doesNotMatch(embed.description, /user_not_found|RoVer bot/);
+
+  const [link, check] = buttonsOf(reply);
+  assert.deepEqual([link.label, link.style, link.url, link.custom_id], ['Verify with Roblox', 5, ROVER_VERIFY, undefined]);
+  assert.deepEqual([check.label, check.custom_id], ['Check again', 'verify:check']);
+
+  assert.deepEqual(lines, [], 'not logged as an error');
+  assert.equal(verifications.findByDiscord(member.id), undefined);
+  assert.ok(!member.roles.cache.has(MEMBER_ROLE));
+  assert.equal(member.nickname, 'Untouched');
+  assert.ok(!JSON.stringify(reply.components.map((row) => row.toJSON())).includes(API_KEY));
+  assert.ok(!JSON.stringify(embed).includes(API_KEY));
+});
+
+test('Check again looks RoVer up again and keeps guiding the member until the account is linked', async () => {
+  const { guild, rover } = setup();
+  unlinked(rover);
+  const member = join(guild);
+  await verification.start(makeInteraction({ guild, member }), { now: later() });
+  const lookups = () => rover.calls.filter((call) => call.method === 'GET').length;
+  const before = lookups();
+
+  const still = makeInteraction({ guild, member, customId: 'verify:check' });
+  await verification.start(still, { update: true, now: later() });
+  assert.ok(lookups() > before, 'the API is queried again');
+  assert.equal(still.calls.deferred, 'update');
+  const embed = embedOf(still.calls.replies[0]);
+  assert.equal(embed.title, 'Roblox Verification');
+  assert.match(embed.description, /^We still couldn't find a Roblox account linked to your Discord account\./);
+  assert.match(embed.description, /click \*\*Verify with Roblox\*\* below\.\nAfter completing it, return here and click \*\*Check again\*\*\.$/);
+  assert.deepEqual(buttonsOf(still.calls.replies[0]).map((button) => button.url ?? button.custom_id), [ROVER_VERIFY, 'verify:check']);
+
+  rover.linked = true;
+  rover.accounts[member.id] = { id: '3001', username: 'now_linked' };
+  const done = makeInteraction({ guild, member, customId: 'verify:check' });
+  await verification.start(done, { update: true, now: later() });
+  assert.equal(embedOf(done.calls.replies[0]).title, 'Verification successful');
+  assert.deepEqual(done.calls.replies[0].components, []);
+  assert.ok(member.roles.cache.has(MEMBER_ROLE));
+  assert.equal(member.nickname, 'Whitee (@now_linked)');
+  const stored = verifications.findByDiscord(member.id);
+  assert.equal(stored.expires_at - stored.verified_at, verification.RETENTION);
+});
+
+test('/verify without a Roblox link shows the RoVer link and keeps the relink Check again', async () => {
+  const { guild, rover } = setup();
+  unlinked(rover);
+  const { reply } = await runVerify(guild, join(guild));
+  assert.deepEqual(buttonsOf(reply).map((button) => button.url ?? button.custom_id), [ROVER_VERIFY, 'verify:check:relink']);
+});
+
+test('the access request and error states never show the RoVer verification link', async () => {
+  const { guild, rover } = setup();
+  const requested = await press(guild, join(guild));
+  assert.match(embedOf(requested.reply).description, /RoVer sent you a direct message/);
+  assert.ok(buttonsOf(requested.reply).every((button) => !button.url), 'consent keeps its own guidance');
+
+  for (const failure of [
+    { status: 429, body: { message: 'Too many requests' }, headers: { 'retry-after': '5' } },
+    { status: 401, body: { errorCode: 'unauthorized' } },
+    { status: 500, body: { errorCode: 'discord_error' } },
+    { status: 400, body: { errorCode: 'bad_request' } },
+    { html: true, status: 502 },
+  ]) {
+    const { guild: other, rover: failing } = setup();
+    failing.failure = failure;
+    const { result } = await quiet(() => press(other, join(other)));
+    assert.notEqual(embedOf(result.reply).title, 'Roblox Verification', JSON.stringify(failure));
+    assert.deepEqual(result.reply.components, [], 'a real error is not shown as a missing link');
+  }
 });
