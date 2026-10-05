@@ -6,8 +6,8 @@ const moderation = require('./moderation');
 const { UserError } = require('../utils/errors');
 
 class ToolError extends Error {
-  constructor(message, outcome = null) {
-    super(message);
+  constructor(message, outcome = null, cause = undefined) {
+    super(message, { cause });
     this.outcome = outcome;
   }
 }
@@ -42,11 +42,15 @@ const API_ERRORS = {
   30013: 'The server has reached the maximum number of channels.',
 };
 
+const isDiscordError = (error) => typeof error?.code === 'number';
+
+const isExpected = (error) => (error instanceof ToolError && (!error.cause || isExpected(error.cause))) || error instanceof UserError || isDiscordError(error);
+
 const describeError = (error) => {
   if (error instanceof ToolError || error instanceof UserError) return error.message;
   if (API_ERRORS[error?.code]) return API_ERRORS[error.code];
   if (error?.status === 429) return 'Discord rate limited the request.';
-  if (error?.code) return `Discord error ${error.code}: ${error.message}`;
+  if (isDiscordError(error)) return `Discord error ${error.code}: ${error.message}`;
   return `Internal error: ${error?.message ?? 'unknown error'}`;
 };
 
@@ -502,18 +506,22 @@ const TOOLS = [
         if (unsafe.length) fail(`These permissions cannot be changed through the chatbot: ${unsafe.join(', ')}.`);
         if (!allow.length && !deny.length) fail('No permission to allow or deny was given.');
         if (allow.some((name) => deny.includes(name))) fail('A permission cannot be allowed and denied at once.');
-        const missing = allow.filter((name) => !allowed(context.me, P[name], channel) || (context.access !== ACCESS.SERVER_OWNER && !allowed(context.actor, P[name], channel)));
-        if (missing.length) fail(`You and Roland must both have a permission in #${channel.name} to allow it: ${missing.join(', ')}.`);
+        const owner = isServerOwner(context, context.actor);
+        const missing = [...allow, ...deny].filter((name) => !allowed(context.me, P[name], channel) || (!owner && !allowed(context.actor, P[name], channel)));
+        if (missing.length) fail(`${owner ? 'Roland needs' : 'You and Roland both need'} these permissions in #${channel.name} to change them: ${missing.join(', ')}.`);
         let target;
         if (label(args.target) === 'everyone') target = { id: context.guild.id, name: '@everyone', role: true };
         else {
           const role = idFrom(args.target) ? context.guild.roles.cache.get(idFrom(args.target)) : [...context.guild.roles.cache.values()].find((entry) => entry.name?.toLowerCase() === label(args.target));
           if (role) {
-            if (role.id !== context.guild.id) assertRole(context, role);
+            if (role.id !== context.guild.id && !owner) {
+              if (role.position >= top(context.actor)) fail(`@${role.name} is at or above your highest role.`);
+              if (STAFF_ROLES.has(role.id) || role.permissions?.has?.(P.Administrator)) fail(`@${role.name} is a protected staff role; only the server owner can change its permissions through the chatbot.`);
+            }
             target = { id: role.id, name: `@${role.name}`, role: true };
           } else {
             const member = await findMember(context, args.target);
-            if (!isServerOwner(context, context.actor) && member.id !== context.actor.id && (member.id === context.guild.ownerId || top(member) >= top(context.actor))) fail(`${nameOf(member)}'s highest role is at or above yours.`);
+            if (!owner && member.id !== context.actor.id && (member.id === context.guild.ownerId || top(member) >= top(context.actor))) fail(`${nameOf(member)}'s highest role is at or above yours.`);
             target = { id: member.id, name: `<@${member.id}>`, role: false };
           }
         }
@@ -694,7 +702,7 @@ const execute = async (context, tool, prepared) => {
   try {
     result = await tool.run(context, prepared);
   } catch (error) {
-    if (await appliedDespite(context, tool, prepared)) throw new ToolError(`Discord applied it, but a later step failed: ${describeError(error)}`, 'partial');
+    if (await appliedDespite(context, tool, prepared)) throw new ToolError(`Discord applied it, but a later step failed: ${describeError(error)}`, 'partial', error);
     throw error;
   }
   if (!tool.verify) return result;
@@ -702,10 +710,10 @@ const execute = async (context, tool, prepared) => {
   try {
     confirmed = await tool.verify(context, prepared, result);
   } catch (error) {
-    throw new ToolError(`${tool.name} ran, but Roland could not check the result: ${describeError(error)}`, 'unknown');
+    throw new ToolError(`${tool.name} ran, but Roland could not check the result: ${describeError(error)}`, 'unknown', error);
   }
   if (!confirmed) fail(`Discord did not confirm the change after ${tool.name}, so it may not have been applied.`);
   return result;
 };
 
-module.exports = { ToolError, TOOLS, SAFE_OVERWRITES, get, definitionsFor, prepare, execute, describeError };
+module.exports = { ToolError, TOOLS, SAFE_OVERWRITES, get, definitionsFor, prepare, execute, describeError, isExpected };

@@ -40,7 +40,7 @@ const withNotice = async (guild, moderator, user, notice, action) => {
   try {
     await action();
   } catch (error) {
-    await message?.delete().catch(() => {});
+    await message?.delete().catch((deleteError) => console.error(`Could not delete the ${notice.type} notice sent to ${user.id}: ${deleteError.message}`));
     throw error;
   }
   return Boolean(message);
@@ -172,7 +172,12 @@ const deleteMessages = async (channel, amount, userId) => {
     if (recent.length) deleted += (await channel.bulkDelete(recent)).size;
     for (const message of old) {
       if (Date.now() >= deadline) break;
-      await message.delete().then(() => deleted++, () => {});
+      await message.delete().then(
+        () => deleted++,
+        (error) => {
+          if (error.code !== RESTJSONErrorCodes.UnknownMessage) console.error(`Could not delete message ${message.id} in channel ${channel.id}: ${error.message}`);
+        },
+      );
     }
   }
 

@@ -288,7 +288,7 @@ const contextFor = async (state) => {
 };
 
 const reasonFor = (error, name) => {
-  if (!(error instanceof tools.ToolError || error instanceof UserError || error?.code)) console.error(`Chatbot tool ${name} failed:`, error);
+  if (!tools.isExpected(error)) console.error(`Chatbot tool ${name} failed:`, error);
   return tools.describeError(error);
 };
 
@@ -308,7 +308,8 @@ const audit = async (state, { call, summary, bypass, confirmation, result, error
         .setTitle('Chatbot • Action')
         .addFields(
           { name: 'Actor', value: `<@${state.actorId}> (\`${state.actorId}\`)`, inline: true },
-          { name: 'Channel', value: `<#${state.channelId}>`, inline: true },
+          { name: 'Channel', value: `<#${state.channelId}> (\`${state.channelId}\`)`, inline: true },
+          { name: 'Guild', value: `\`${state.guildId}\``, inline: true },
           { name: 'Tool', value: `\`${String(call.name || 'unknown').slice(0, 100)}\``, inline: true },
           { name: 'Action', value: (summary ?? 'Could not be prepared').slice(0, 1024) },
           { name: 'Arguments', value: `\`\`\`json\n${JSON.stringify(call.arguments ?? null).slice(0, 900)}\n\`\`\`` },
@@ -499,25 +500,25 @@ const approveCall = async (state, call) => {
   } catch (error) {
     const reason = reasonFor(error, call.name);
     record(state, call.summary, 'failed', reason);
-    await audit(state, { call, summary: call.summary, bypass: false, confirmation: 'approved', result: 'failed', error: reason });
+    await audit(state, { call, summary: call.summary, bypass: false, confirmation: 'required: approved', result: 'failed', error: reason });
     return { ok: false, status: 'failed', error: reason };
   }
   if (!context) {
     record(state, call.summary, 'revoked');
-    await audit(state, { call, summary: call.summary, bypass: false, confirmation: 'approved', result: 'not performed', error: revoked.error });
+    await audit(state, { call, summary: call.summary, bypass: false, confirmation: 'required: approved', result: 'not performed', error: revoked.error });
     return revoked;
   }
   let prepared;
   try {
     prepared = await tools.prepare(context, call.name, call.arguments);
   } catch (error) {
-    return notAttempted(state, call, { summary: call.summary, bypass: context.bypass, confirmation: 'approved', reason: reasonFor(error, call.name) });
+    return notAttempted(state, call, { summary: call.summary, bypass: context.bypass, confirmation: 'required: approved', reason: reasonFor(error, call.name) });
   }
   if (prepared.tool.describe(prepared.prepared) !== call.summary) {
     const reason = 'what this action points to changed after it was requested, so it was not run; ask again';
-    return notAttempted(state, call, { summary: call.summary, bypass: context.bypass, confirmation: 'approved', reason });
+    return notAttempted(state, call, { summary: call.summary, bypass: context.bypass, confirmation: 'required: approved', reason });
   }
-  return perform(state, context, call, prepared, 'approved');
+  return perform(state, context, call, prepared, 'required: approved');
 };
 
 const decide = async (interaction, action, decision) => {
@@ -532,7 +533,7 @@ const decide = async (interaction, action, decision) => {
     for (const call of action.calls) {
       answerTool(state, call, { ok: false, status: 'rejected', error: 'The user chose not to perform this action.' });
       record(state, call.summary, 'rejected');
-      await audit(state, { call, summary: call.summary, bypass: false, confirmation: 'rejected', result: 'not performed' });
+      await audit(state, { call, summary: call.summary, bypass: false, confirmation: 'required: rejected', result: 'not performed' });
     }
     return authorized(state);
   }
