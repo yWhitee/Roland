@@ -45,6 +45,7 @@ test('command permission matrix', () => {
     warn: ['moderator', 'senior', 'admin', 'owner'],
     modlog: ['moderator', 'senior', 'admin', 'owner'],
     case: ['moderator', 'senior', 'admin', 'owner'],
+    caseremove: ['moderator', 'senior', 'admin', 'owner'],
     ban: ['senior', 'admin', 'owner'],
     kick: ['senior', 'admin', 'owner'],
     unban: ['senior', 'admin', 'owner'],

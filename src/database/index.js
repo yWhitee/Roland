@@ -189,7 +189,8 @@ const migrations = [
   ALTER TABLE punishments ADD COLUMN moderator_display_name TEXT;
   UPDATE punishments SET case_number = (
     SELECT COUNT(*) FROM punishments earlier
-    WHERE earlier.guild_id = punishments.guild_id AND earlier.user_id IS NOT NULL AND earlier.id <= punishments.id
+    WHERE earlier.guild_id = punishments.guild_id AND earlier.user_id IS NOT NULL
+      AND (earlier.created_at < punishments.created_at OR (earlier.created_at = punishments.created_at AND earlier.id <= punishments.id))
   ) WHERE user_id IS NOT NULL;
   CREATE UNIQUE INDEX punishments_case ON punishments (guild_id, case_number);
   CREATE TABLE case_counters (
@@ -198,6 +199,9 @@ const migrations = [
   );
   INSERT INTO case_counters (guild_id, last_case)
     SELECT guild_id, MAX(case_number) FROM punishments WHERE case_number IS NOT NULL GROUP BY guild_id;`,
+  `ALTER TABLE punishments ADD COLUMN removed_at INTEGER;
+  ALTER TABLE punishments ADD COLUMN removed_by TEXT;
+  ALTER TABLE punishments ADD COLUMN removed_by_name TEXT;`,
 ];
 
 let db;

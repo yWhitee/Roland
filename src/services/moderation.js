@@ -3,7 +3,7 @@ const punishments = require('../database/punishments');
 const permissions = require('../permissions');
 const logging = require('./logging');
 const { parseDuration, assertTimeout } = require('../utils/duration');
-const { noticeEmbed } = require('../utils/embeds');
+const { caseRemovedEmbed, casesRemovedEmbed, noticeEmbed } = require('../utils/embeds');
 const { UserError } = require('../utils/errors');
 
 const MAX_CLEAR = 5000;
@@ -254,6 +254,43 @@ const automodMute = async ({ guild, member, duration, functionId, reason, channe
   });
 };
 
+const caseNumberOf = (input) => Number(String(input).trim().match(/^#?(\d{1,15})$/)?.[1] ?? 0) || null;
+
+const removeCase = async ({ guild, moderator, userId, caseNumber, now = Date.now() }) => {
+  const result = punishments.removeCase({
+    guildId: guild.id,
+    userId,
+    caseNumber,
+    removedBy: moderator.id,
+    removedByName: moderator.user?.username ?? null,
+    removedAt: now,
+  });
+  if (result.status === 'missing') throw new UserError(`Case #${caseNumber} does not exist in this server.`);
+  if (result.status === 'other-user') throw new UserError(`Case #${caseNumber} does not belong to <@${userId}>.`);
+  if (result.status === 'already-removed') throw new UserError(`Case #${caseNumber} was already removed from the modlog.`);
+  await logging.sendEmbed(guild, caseRemovedEmbed(result.record));
+  return result.record;
+};
+
+const removeUserCases = async ({ guild, moderator, userId, now = Date.now() }) => {
+  const caseNumbers = punishments.removeUserCases({
+    guildId: guild.id,
+    userId,
+    removedBy: moderator.id,
+    removedByName: moderator.user?.username ?? null,
+    removedAt: now,
+  });
+  if (!caseNumbers.length) {
+    throw new UserError(
+      punishments.countUserCases(guild.id, userId)
+        ? `All cases of <@${userId}> were already removed from the modlog.`
+        : `<@${userId}> has no cases in this server.`,
+    );
+  }
+  await logging.sendEmbed(guild, casesRemovedEmbed({ userId, caseNumbers, removedBy: moderator.id, removedAt: now }));
+  return caseNumbers;
+};
+
 const history = (guildId, userId, page, size) => {
   const total = punishments.countByUser(guildId, userId);
   const pages = Math.max(1, Math.ceil(total / size));
@@ -261,4 +298,20 @@ const history = (guildId, userId, page, size) => {
   return { total, pages, page: current, records: punishments.listByUser(guildId, userId, size, current * size) };
 };
 
-module.exports = { MAX_CLEAR, ban, kick, mute, unmute, unban, warn, clear, expireBan, automodWarn, automodMute, history };
+module.exports = {
+  MAX_CLEAR,
+  ban,
+  kick,
+  mute,
+  unmute,
+  unban,
+  warn,
+  clear,
+  expireBan,
+  automodWarn,
+  automodMute,
+  caseNumberOf,
+  removeCase,
+  removeUserCases,
+  history,
+};

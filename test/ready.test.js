@@ -18,7 +18,7 @@ const verification = require('../src/services/verification');
 
 const commands = load(path.join(__dirname, '..', 'src', 'commands'));
 const GUILD_COMMANDS = [
-  'automod', 'automodlist', 'automodwhitelist', 'ban', 'case', 'clear', 'createverify', 'embed', 'kick', 'leaderboard', 'level',
+  'automod', 'automodlist', 'automodwhitelist', 'ban', 'case', 'caseremove', 'clear', 'createverify', 'embed', 'kick', 'leaderboard', 'level',
   'levelset', 'levelsystem', 'logs', 'modlog', 'mute', 'nomessages', 'ping', 'ticketcreate', 'unban', 'unmute', 'verify', 'verifyinfo', 'warn',
 ];
 
@@ -62,7 +62,7 @@ const start = async (rest, applicationId = APPLICATION) => {
   }
 };
 
-test('Roland registers its commands on startup: 24 guild commands and /play as the only global command', async () => {
+test('Roland registers its commands on startup: 25 guild commands and /play as the only global command', async () => {
   const { requests, rest, close } = await discord();
   let lines;
   try {
@@ -80,7 +80,7 @@ test('Roland registers its commands on startup: 24 guild commands and /play as t
   assert.deepEqual(requests[1].body, [
     { options: [], name: 'play', description: 'Play Slime Odyssey: Anime Realms on Roblox', contexts: [0, 1], integration_types: [0], type: 1 },
   ]);
-  assert.equal(lines.at(-1), `Registered 24 guild command(s) in guild ${GUILD} and 1 global command(s): play`);
+  assert.equal(lines.at(-1), `Registered 25 guild command(s) in guild ${GUILD} and 1 global command(s): play`);
 });
 
 test('commands are registered to the application the bot logged in as, with a warning when DISCORD_CLIENT_ID differs', async () => {

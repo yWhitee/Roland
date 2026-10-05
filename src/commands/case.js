@@ -2,10 +2,10 @@ const { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags
 const punishments = require('../database/punishments');
 const { Level } = require('../permissions');
 const { ACTIONS, Colors, caseEmbed, describe, recordLabel } = require('../utils/embeds');
+const moderation = require('../services/moderation');
 const { UserError } = require('../utils/errors');
 
 const PAGE_SIZE = 5;
-const CASE_NUMBER = /^#?(\d{1,15})$/;
 
 const render = (guildId, ownerId, requestedPage) => {
   const total = punishments.countCases(guildId);
@@ -17,7 +17,12 @@ const render = (guildId, ownerId, requestedPage) => {
     .setColor(Colors.info)
     .setTitle('Moderation Cases')
     .setDescription(total ? `**Total cases:** ${total}` : 'No cases recorded in this server.')
-    .addFields(cases.map((record) => ({ name: `${ACTIONS[record.type].emoji} Case #${record.case_number} • ${recordLabel(record)}`, value: describe(record) })))
+    .addFields(
+      cases.map((record) => ({
+        name: `${ACTIONS[record.type].emoji} Case #${record.case_number} • ${recordLabel(record)}${record.removed_at ? ' • Removed from Modlog' : ''}`,
+        value: describe(record),
+      })),
+    )
     .setFooter({ text: `Page ${page + 1} / ${pages}` });
 
   const button = (name, label, target, disabled) =>
@@ -46,8 +51,8 @@ module.exports = {
       return interaction.editReply(render(interaction.guildId, interaction.user.id, 0));
     }
 
-    const caseNumber = Number(input.match(CASE_NUMBER)?.[1] ?? 0);
-    if (caseNumber < 1) throw new UserError('Provide a case number, e.g. /case 184, or /case all.');
+    const caseNumber = moderation.caseNumberOf(input);
+    if (!caseNumber) throw new UserError('Provide a case number, e.g. /case 184, or /case all.');
     const record = punishments.findByCase(interaction.guildId, caseNumber);
     if (!record) throw new UserError(`Case #${caseNumber} does not exist in this server.`);
     return interaction.reply({ embeds: [caseEmbed(record)], flags: MessageFlags.Ephemeral });

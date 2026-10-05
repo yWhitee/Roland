@@ -49,10 +49,49 @@ const recordEmbed = (record, title) =>
     .setFooter({ text: recordName(record) })
     .setTimestamp(record.created_at);
 
+const removal = (record) => [
+  '**Status:** Removed from Modlog',
+  `**Removed by:** <@${record.removed_by}>${record.removed_by_name ? ` • ${escapeMarkdown(record.removed_by_name)}` : ''}`,
+  `**Removed at:** ${time(record.removed_at)}`,
+];
+
+const caseRemovedEmbed = (record) =>
+  new EmbedBuilder()
+    .setColor(Colors.warning)
+    .setTitle('Moderation • Case Removed')
+    .setDescription(
+      [
+        `**Case:** #${record.case_number}`,
+        `**User:** <@${record.user_id}> (\`${record.user_id}\`)`,
+        `**Action:** ${ACTIONS[record.type].emoji} ${recordLabel(record)}`,
+        `**Removed by:** <@${record.removed_by}>`,
+        `**Date:** ${time(record.removed_at)}`,
+      ].join('\n'),
+    )
+    .setTimestamp(record.removed_at);
+
+const casesRemovedEmbed = ({ userId, caseNumbers, removedBy, removedAt }) => {
+  const list = caseNumbers.map((number) => `#${number}`).join(', ');
+  return new EmbedBuilder()
+    .setColor(Colors.warning)
+    .setTitle('Moderation • Cases Removed')
+    .setDescription(
+      [
+        `**User:** <@${userId}> (\`${userId}\`)`,
+        `**Cases removed from Modlog:** ${caseNumbers.length}`,
+        `**Cases:** ${list.length > 1000 ? `${list.slice(0, list.lastIndexOf(',', 1000))}, …` : list}`,
+        `**Removed by:** <@${removedBy}>`,
+        `**Date:** ${time(removedAt)}`,
+      ].join('\n'),
+    )
+    .setTimestamp(removedAt);
+};
+
 const caseEmbed = (record) => {
   const lines = [`**Action:** ${ACTIONS[record.type].emoji} ${recordLabel(record)}`, describe(record)];
-  if (record.type === 'ban') lines.push(`**Status:** ${record.active ? 'Active' : 'Lifted'}`);
+  if (record.type === 'ban') lines.push(`**Ban status:** ${record.active ? 'Active' : 'Lifted'}`);
   if (record.user_display_name && record.user_display_name !== record.user_name) lines.push(`**Display name at the time:** ${escapeMarkdown(record.user_display_name)}`);
+  if (record.removed_at) lines.push('', ...removal(record));
   return new EmbedBuilder()
     .setColor(ACTIONS[record.type].color)
     .setTitle(`Case #${record.case_number}`)
@@ -83,4 +122,4 @@ const errorEmbed = (message) => new EmbedBuilder().setColor(Colors.error).setDes
 
 const successEmbed = (message) => new EmbedBuilder().setColor(Colors.success).setDescription(`✅ ${message}`);
 
-module.exports = { ACTIONS, Colors, time, describe, recordLabel, recordName, recordEmbed, caseEmbed, noticeEmbed, withDmStatus, errorEmbed, successEmbed };
+module.exports = { ACTIONS, Colors, time, describe, recordLabel, recordName, recordEmbed, caseEmbed, caseRemovedEmbed, casesRemovedEmbed, noticeEmbed, withDmStatus, errorEmbed, successEmbed };

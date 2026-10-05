@@ -58,6 +58,32 @@ const listCases = (guildId, limit, offset = 0) =>
 const countCases = (guildId) =>
   database.get().prepare('SELECT COUNT(*) AS total FROM punishments WHERE guild_id = ? AND case_number IS NOT NULL').get(guildId).total;
 
+const countUserCases = (guildId, userId) =>
+  database.get().prepare('SELECT COUNT(*) AS total FROM punishments WHERE guild_id = ? AND user_id = ? AND case_number IS NOT NULL').get(guildId, userId).total;
+
+const removeCase = ({ guildId, userId, caseNumber, removedBy, removedByName, removedAt }) => {
+  const db = database.get();
+  return db.transaction(() => {
+    const record = findByCase(guildId, caseNumber);
+    if (!record) return { status: 'missing' };
+    if (record.user_id !== userId) return { status: 'other-user' };
+    if (record.removed_at) return { status: 'already-removed', record };
+    db.prepare('UPDATE punishments SET removed_at = ?, removed_by = ?, removed_by_name = ? WHERE id = ?').run(removedAt, removedBy, removedByName, record.id);
+    return { status: 'removed', record: findById(record.id) };
+  }).immediate();
+};
+
+const removeUserCases = ({ guildId, userId, removedBy, removedByName, removedAt }) =>
+  database.get()
+    .prepare(`
+      UPDATE punishments SET removed_at = ?, removed_by = ?, removed_by_name = ?
+      WHERE guild_id = ? AND user_id = ? AND case_number IS NOT NULL AND removed_at IS NULL
+      RETURNING case_number
+    `)
+    .all(removedAt, removedBy, removedByName, guildId, userId)
+    .map((row) => row.case_number)
+    .sort((a, b) => a - b);
+
 const latestNames = (guildId, userId) =>
   database.get()
     .prepare('SELECT user_name, user_display_name FROM punishments WHERE guild_id = ? AND user_id = ? AND user_name IS NOT NULL ORDER BY id DESC LIMIT 1')
@@ -65,12 +91,12 @@ const latestNames = (guildId, userId) =>
 
 const listByUser = (guildId, userId, limit, offset = 0) =>
   database.get()
-    .prepare('SELECT * FROM punishments WHERE guild_id = ? AND user_id = ? ORDER BY id DESC LIMIT ? OFFSET ?')
+    .prepare('SELECT * FROM punishments WHERE guild_id = ? AND user_id = ? AND removed_at IS NULL ORDER BY id DESC LIMIT ? OFFSET ?')
     .all(guildId, userId, limit, offset)
     .map(toRecord);
 
 const countByUser = (guildId, userId) =>
-  database.get().prepare('SELECT COUNT(*) AS total FROM punishments WHERE guild_id = ? AND user_id = ?').get(guildId, userId).total;
+  database.get().prepare('SELECT COUNT(*) AS total FROM punishments WHERE guild_id = ? AND user_id = ? AND removed_at IS NULL').get(guildId, userId).total;
 
 const dueBans = (now = Date.now()) =>
   database.get()
@@ -83,4 +109,18 @@ const deactivateBans = (guildId, userId) =>
     .prepare("UPDATE punishments SET active = 0 WHERE type = 'ban' AND active = 1 AND guild_id = ? AND user_id = ?")
     .run(guildId, userId).changes;
 
-module.exports = { create, findById, findByCase, listByUser, countByUser, listCases, countCases, latestNames, dueBans, deactivateBans };
+module.exports = {
+  create,
+  findById,
+  findByCase,
+  listByUser,
+  countByUser,
+  listCases,
+  countCases,
+  countUserCases,
+  removeCase,
+  removeUserCases,
+  latestNames,
+  dueBans,
+  deactivateBans,
+};
