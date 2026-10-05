@@ -182,6 +182,22 @@ const migrations = [
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (guild_id, channel_id)
   );`,
+  `ALTER TABLE punishments ADD COLUMN case_number INTEGER;
+  ALTER TABLE punishments ADD COLUMN user_name TEXT;
+  ALTER TABLE punishments ADD COLUMN user_display_name TEXT;
+  ALTER TABLE punishments ADD COLUMN moderator_name TEXT;
+  ALTER TABLE punishments ADD COLUMN moderator_display_name TEXT;
+  UPDATE punishments SET case_number = (
+    SELECT COUNT(*) FROM punishments earlier
+    WHERE earlier.guild_id = punishments.guild_id AND earlier.user_id IS NOT NULL AND earlier.id <= punishments.id
+  ) WHERE user_id IS NOT NULL;
+  CREATE UNIQUE INDEX punishments_case ON punishments (guild_id, case_number);
+  CREATE TABLE case_counters (
+    guild_id TEXT PRIMARY KEY,
+    last_case INTEGER NOT NULL
+  );
+  INSERT INTO case_counters (guild_id, last_case)
+    SELECT guild_id, MAX(case_number) FROM punishments WHERE case_number IS NOT NULL GROUP BY guild_id;`,
 ];
 
 let db;

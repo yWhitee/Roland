@@ -21,6 +21,15 @@ const requireMember = (target) => {
   if (!target.member) throw new UserError('This user is not a member of the server.');
 };
 
+const names = (target, moderator) => ({
+  userName: target?.user?.username ?? null,
+  userDisplayName: target?.member?.displayName ?? target?.user?.globalName ?? target?.user?.username ?? null,
+  moderatorName: moderator?.user?.username ?? null,
+  moderatorDisplayName: moderator?.displayName ?? moderator?.user?.globalName ?? moderator?.user?.username ?? null,
+});
+
+const roland = (guild) => guild.members.me ?? { user: guild.client.user };
+
 const auditReason = (moderator, reason) => `${moderator.user.tag}: ${reason}`.slice(0, 512);
 
 const notify = (guild, moderator, user, notice) =>
@@ -64,6 +73,7 @@ const ban = async ({ guild, moderator, target, duration, reason, channelId }) =>
   );
 
   const entry = await record(guild, {
+    ...names(target, moderator),
     type: 'ban',
     userId: target.user.id,
     moderatorId: moderator.id,
@@ -85,7 +95,7 @@ const kick = async ({ guild, moderator, target, reason, channelId }) => {
     target.member.kick(auditReason(moderator, reason)),
   );
 
-  const entry = await record(guild, { type: 'kick', userId: target.user.id, moderatorId: moderator.id, reason, channelId });
+  const entry = await record(guild, { ...names(target, moderator), type: 'kick', userId: target.user.id, moderatorId: moderator.id, reason, channelId });
   return { record: entry, dmSent };
 };
 
@@ -99,6 +109,7 @@ const mute = async ({ guild, moderator, target, duration, reason, channelId }) =
 
   await target.member.disableCommunicationUntil(parsed.expiresAt, auditReason(moderator, reason));
   const entry = await record(guild, {
+    ...names(target, moderator),
     type: 'mute',
     userId: target.user.id,
     moderatorId: moderator.id,
@@ -120,7 +131,7 @@ const unmute = async ({ guild, moderator, target, reason, channelId }) => {
   if (!target.member.isCommunicationDisabled()) throw new UserError('This user is not muted.');
 
   await target.member.timeout(null, auditReason(moderator, reason));
-  return record(guild, { type: 'unmute', userId: target.user.id, moderatorId: moderator.id, reason, channelId });
+  return record(guild, { ...names(target, moderator), type: 'unmute', userId: target.user.id, moderatorId: moderator.id, reason, channelId });
 };
 
 const unban = async ({ guild, moderator, target, reason, channelId }) => {
@@ -129,7 +140,7 @@ const unban = async ({ guild, moderator, target, reason, channelId }) => {
 
   await guild.bans.remove(target.user.id, auditReason(moderator, reason));
   punishments.deactivateBans(guild.id, target.user.id);
-  return record(guild, { type: 'unban', userId: target.user.id, moderatorId: moderator.id, reason, channelId });
+  return record(guild, { ...names(target, moderator), type: 'unban', userId: target.user.id, moderatorId: moderator.id, reason, channelId });
 };
 
 const warn = async ({ guild, moderator, target, reason, channelId }) => {
@@ -137,7 +148,7 @@ const warn = async ({ guild, moderator, target, reason, channelId }) => {
   requireMember(target);
   permissions.assertCanModerate(moderator, target);
 
-  const entry = await record(guild, { type: 'warn', userId: target.user.id, moderatorId: moderator.id, reason, channelId });
+  const entry = await record(guild, { ...names(target, moderator), type: 'warn', userId: target.user.id, moderatorId: moderator.id, reason, channelId });
   const dmSent = Boolean(await notify(guild, moderator, target.user, { type: 'warn', reason, createdAt: entry.created_at }));
   return { record: entry, dmSent };
 };
@@ -175,6 +186,7 @@ const clear = async ({ guild, moderator, channel, amount, target }) => {
 
   const deleted = await deleteMessages(channel, amount, target?.user.id);
   return record(guild, {
+    ...names(target, moderator),
     type: 'clear',
     userId: target?.user.id,
     moderatorId: moderator.id,
@@ -197,11 +209,20 @@ const expireBan = async (client, ban) => {
   }
 
   punishments.deactivateBans(guild.id, ban.user_id);
-  return record(guild, { type: 'unban', userId: ban.user_id, moderatorId: client.user.id, reason });
+  return record(guild, {
+    ...names(null, { user: client.user }),
+    userName: ban.user_name,
+    userDisplayName: ban.user_display_name,
+    type: 'unban',
+    userId: ban.user_id,
+    moderatorId: client.user.id,
+    reason,
+  });
 };
 
-const automodWarn = ({ guild, userId, functionId, reason, channelId }) =>
+const automodWarn = ({ guild, userId, member, functionId, reason, channelId }) =>
   punishments.create({
+    ...names(member && { user: member.user, member }, roland(guild)),
     type: 'warn',
     guildId: guild.id,
     userId,
@@ -219,6 +240,7 @@ const automodMute = async ({ guild, member, duration, functionId, reason, channe
     await member.disableCommunicationUntil(parsed.expiresAt, `Roland AutoMod (${functionId}): ${reason}`.slice(0, 512));
   }
   return punishments.create({
+    ...names({ user: member.user, member }, roland(guild)),
     type: 'mute',
     guildId: guild.id,
     userId: member.id,

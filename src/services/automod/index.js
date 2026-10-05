@@ -59,7 +59,7 @@ const enforce = async ({ fn, message, member, detection, now }) => {
   const outcome = { fn, level, action, detail: detection.detail, deleted: 0, warning: null, mute: null, dmSent: false, errors: [] };
 
   if (action.delete) outcome.deleted = await deleteMessages(guild, detection.entries, outcome.errors);
-  if (action.warn) outcome.warning = moderation.automodWarn({ guild, userId: member.id, functionId: fn.id, reason, channelId: channel.id });
+  if (action.warn) outcome.warning = moderation.automodWarn({ guild, userId: member.id, member, functionId: fn.id, reason, channelId: channel.id });
   if (action.mute) {
     try {
       outcome.mute = await moderation.automodMute({ guild, member, duration: action.mute, functionId: fn.id, reason, channelId: channel.id });

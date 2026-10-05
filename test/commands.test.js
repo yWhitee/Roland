@@ -13,7 +13,7 @@ const { makeMember, tempDatabase } = require('./helpers/discord');
 const commands = load(path.join(__dirname, '..', 'src', 'commands'));
 const components = load(path.join(__dirname, '..', 'src', 'components'));
 const EXPECTED = [
-  'automod', 'automodlist', 'automodwhitelist', 'ban', 'clear', 'createverify', 'embed', 'kick', 'leaderboard', 'level',
+  'automod', 'automodlist', 'automodwhitelist', 'ban', 'case', 'clear', 'createverify', 'embed', 'kick', 'leaderboard', 'level',
   'levelset', 'levelsystem', 'logs', 'modlog', 'mute', 'nomessages', 'ping', 'ticketcreate', 'unban', 'unmute', 'verify', 'verifyinfo', 'warn',
 ];
 

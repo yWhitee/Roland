@@ -32,8 +32,8 @@ const violationLog = (member, channel, outcome) => {
   const { fn, level, action, deleted, warning, mute, dmSent, errors, detail } = outcome;
   const actions = [];
   if (action.delete) actions.push(`DELETE (${deleted} ${deleted === 1 ? 'message' : 'messages'})`);
-  if (warning) actions.push(`WARN (record #${warning.id})`);
-  if (mute) actions.push(`TIMEOUT ${formatDuration(mute.duration)} (record #${mute.id})`);
+  if (warning) actions.push(`WARN (record #${warning.id}) • Case #${warning.case_number}`);
+  if (mute) actions.push(`TIMEOUT ${formatDuration(mute.duration)} (record #${mute.id}) • Case #${mute.case_number}`);
 
   const embed = new EmbedBuilder()
     .setColor(mute ? Colors.error : Colors.warning)
