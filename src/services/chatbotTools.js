@@ -22,6 +22,13 @@ const unless = (...codes) => (error) => {
 };
 
 const STAFF_ROLES = new Set(Object.values(permissions.ROLES));
+const MAX_SENT = 1000;
+const sentByChatbot = new Set();
+
+const remember = (id) => {
+  sentByChatbot.add(id);
+  if (sentByChatbot.size > MAX_SENT) sentByChatbot.delete(sentByChatbot.values().next().value);
+};
 const SAFE_OVERWRITES = ['ViewChannel', 'SendMessages', 'ReadMessageHistory', 'AddReactions', 'AttachFiles', 'EmbedLinks', 'Connect', 'Speak', 'SendMessagesInThreads'];
 const CHANNEL_TYPES = { text: ChannelType.GuildText, voice: ChannelType.GuildVoice, category: ChannelType.GuildCategory };
 const MENTION = /^(?:<[@#]?[!&]?(\d{17,20})>|(\d{17,20}))$/;
@@ -99,17 +106,23 @@ const findRole = ({ guild }, value) => {
   return unique([...guild.roles.cache.values()].filter((role) => role.name?.toLowerCase() === name), 'role', value);
 };
 
-const findChannel = async ({ guild, channel: current }, value, fallback = false) => {
-  if ((value === undefined || value === null || value === '') && fallback) return current;
+const isThread = (channel) => Boolean(channel.isThread?.());
+
+const usable = (channel) => (isThread(channel) ? fail('Threads cannot be used through the chatbot tools.') : channel);
+
+const findChannel = async (context, value, fallback = false) => {
+  const { guild, channel: current } = context;
+  if ((value === undefined || value === null || value === '') && fallback) return usable(current);
   const id = idFrom(value);
   if (id) {
     const channel = guild.channels.cache.get(id) ?? (await guild.channels.fetch(id).catch(unless(10003)));
-    if (!channel || channel.guild?.id !== guild.id) fail(`No channel with ID ${id} exists in this server.`);
-    return channel;
+    if (!channel || channel.guild?.id !== guild.id || !canSee(context, channel)) fail(`No channel with ID ${id} that you can view exists in this server.`);
+    return usable(channel);
   }
   const name = label(value);
   if (!name) fail('A channel is required.');
-  return unique([...guild.channels.cache.values()].filter((channel) => channel.name?.toLowerCase() === name), 'channel', value);
+  const matches = [...guild.channels.cache.values()].filter((channel) => !isThread(channel) && channel.name?.toLowerCase() === name && canSee(context, channel));
+  return unique(matches, 'channel you can view', value);
 };
 
 const top = (member) => member?.roles?.highest?.position ?? 0;
@@ -171,6 +184,11 @@ const memberSummary = (guild, member) => ({
 
 const channelSummary = (channel) => ({ id: channel.id, name: channel.name, type: ChannelType[channel.type] ?? channel.type, parent_id: channel.parentId ?? null });
 
+const freshOverwrite = async ({ guild }, channel, targetId) => {
+  const fresh = await guild.channels.fetch(channel.id, { force: true }).catch(unless(10003));
+  return fresh?.permissionOverwrites?.cache?.get(targetId) ?? null;
+};
+
 const refetchMember = (context, id) => context.guild.members.fetch({ user: id, force: true }).catch(unless(10007));
 
 const fetchMessage = async (channel, value) =>
@@ -229,7 +247,7 @@ const TOOLS = [
   }),
   definition('get_channels', 'List the channels you can see', {}, [], {
     prepare: () => ({}),
-    run: (context) => [...context.guild.channels.cache.values()].filter((channel) => canSee(context, channel)).slice(0, 75).map(channelSummary),
+    run: (context) => [...context.guild.channels.cache.values()].filter((channel) => !isThread(channel) && canSee(context, channel)).slice(0, 75).map(channelSummary),
   }),
   definition('get_channel_info', 'Details of one channel', { channel: CHANNEL }, ['channel'], {
     prepare: async (context, args) => ({ channel: visible(context, await findChannel(context, args.channel)) }),
@@ -251,7 +269,11 @@ const TOOLS = [
       needs(context, P.SendMessages, 'Send Messages', channel);
       return { channel, content: text(args.content, 'content', 2000) };
     },
-    run: async (context, { channel, content }) => ({ message_id: (await channel.send({ content, allowedMentions: { parse: [] } })).id }),
+    run: async (context, { channel, content }) => {
+      const sent = await channel.send({ content, allowedMentions: { parse: [] } });
+      remember(sent.id);
+      return { message_id: sent.id };
+    },
     verify: (context, prepared, result) => Boolean(result.message_id),
     describe: ({ channel, content }) => `Send a message in <#${channel.id}>: "${content.slice(0, 200)}"`,
   }),
@@ -262,6 +284,7 @@ const TOOLS = [
       needs(context, P.ManageMessages, 'Manage Messages', channel);
       const message = await fetchMessage(channel, args.message_id);
       if (message.author?.id !== context.me.id) fail('Discord only lets a bot edit its own messages.');
+      if (context.access !== ACCESS.SERVER_OWNER && !sentByChatbot.has(message.id)) fail('Only messages the chatbot sent with send_message can be edited this way.');
       return { channel, message, content: text(args.content, 'content', 2000) };
     },
     run: async (context, { message, content }) => ({ message_id: (await message.edit({ content, allowedMentions: { parse: [] } })).id ?? message.id }),
@@ -440,6 +463,7 @@ const TOOLS = [
         const type = CHANNEL_TYPES[String(args.type ?? 'text').toLowerCase()] ?? fail('type must be text, voice or category.');
         const parent = args.parent ? await findChannel(context, args.parent) : null;
         if (parent && parent.type !== ChannelType.GuildCategory) fail(`#${parent.name} is not a category.`);
+        if (parent) needs(context, P.ManageChannels, 'Manage Channels', parent);
         return { name: text(args.name, 'name', 100), type, parent, topic: text(args.topic, 'topic', 1024, true) };
       },
       run: async ({ guild }, { name, type, parent, topic }) => {
@@ -512,13 +536,16 @@ const TOOLS = [
         let target;
         if (label(args.target) === 'everyone') target = { id: context.guild.id, name: '@everyone', role: true };
         else {
-          const role = idFrom(args.target) ? context.guild.roles.cache.get(idFrom(args.target)) : [...context.guild.roles.cache.values()].find((entry) => entry.name?.toLowerCase() === label(args.target));
+          const roleId = idFrom(args.target);
+          const roles = roleId ? [context.guild.roles.cache.get(roleId)].filter(Boolean) : [...context.guild.roles.cache.values()].filter((entry) => entry.name?.toLowerCase() === label(args.target));
+          if (roles.length > 1) fail(`More than one role matches "${args.target}". Use its ID.`);
+          const [role] = roles;
           if (role) {
             if (role.id !== context.guild.id && !owner) {
               if (role.position >= top(context.actor)) fail(`@${role.name} is at or above your highest role.`);
               if (STAFF_ROLES.has(role.id) || role.permissions?.has?.(P.Administrator)) fail(`@${role.name} is a protected staff role; only the server owner can change its permissions through the chatbot.`);
             }
-            target = { id: role.id, name: `@${role.name}`, role: true };
+            target = { id: role.id, name: role.id === context.guild.id ? '@everyone' : `<@&${role.id}>`, role: true };
           } else {
             const member = await findMember(context, args.target);
             if (!owner && member.id !== context.actor.id && (member.id === context.guild.ownerId || top(member) >= top(context.actor))) fail(`${nameOf(member)}'s highest role is at or above yours.`);
@@ -532,8 +559,8 @@ const TOOLS = [
         await channel.permissionOverwrites.edit(target.id, changes, { reason: 'Requested through the Roland chatbot' });
         return { channel_id: channel.id, target: target.name, allowed: allow, denied: deny };
       },
-      verify: ({ guild }, { channel, target, allow, deny }) => {
-        const overwrite = (guild.channels.cache.get(channel.id) ?? channel).permissionOverwrites?.cache?.get(target.id);
+      verify: async (context, { channel, target, allow, deny }) => {
+        const overwrite = await freshOverwrite(context, channel, target.id);
         return Boolean(overwrite) && allow.every((name) => overwrite.allow.has(P[name])) && deny.every((name) => overwrite.deny.has(P[name]));
       },
       describe: ({ channel, target, allow, deny }) =>
@@ -549,15 +576,16 @@ const TOOLS = [
       prepare: async (context, args) => {
         const channel = textChannel(visible(context, await findChannel(context, args.channel, true)));
         needs(context, P.ManageChannels, 'Manage Channels', channel);
-        if (!allowed(context.me, P.ManageRoles, channel)) fail(`Roland does not have the Manage Permissions permission in #${channel.name}.`);
+        needs(context, P.ManageRoles, 'Manage Permissions', channel);
+        needs(context, P.SendMessages, 'Send Messages', channel);
         return { channel };
       },
       run: async ({ guild }, { channel }) => {
         await channel.permissionOverwrites.edit(guild.id, { SendMessages: value }, { reason: 'Requested through the Roland chatbot' });
         return { channel_id: channel.id, locked: value === false };
       },
-      verify: ({ guild }, { channel }) => {
-        const denied = Boolean(channel.permissionOverwrites?.cache?.get(guild.id)?.deny?.has(P.SendMessages));
+      verify: async (context, { channel }) => {
+        const denied = Boolean((await freshOverwrite(context, channel, context.guild.id))?.deny?.has(P.SendMessages));
         return value === false ? denied : !denied;
       },
       describe: ({ channel }) => `${verb} <#${channel.id}>`,
@@ -598,6 +626,7 @@ const TOOLS = [
         const target = await moderationTarget(context, args.member);
         permissions.assertCanModerate(context.actor, target);
         assertMember(context, target.member, { self: false });
+        if (target.member.isCommunicationDisabled?.()) fail(`<@${target.user.id}> is already timed out.`);
         return { target, duration: text(args.duration, 'duration', 20), reason: text(args.reason, 'reason', 500) };
       },
       run: async (context, { target, duration, reason }) => ({
@@ -631,6 +660,7 @@ const TOOLS = [
       const target = await userTarget(context, args.user);
       permissions.assertCanModerate(context.actor, target);
       if (target.member) assertMember(context, target.member, { self: false });
+      if (await isBanned(context, target.user.id)) fail(`<@${target.user.id}> is already banned.`);
       return { target, duration: text(args.duration, 'duration', 20, true) ?? 'forever', reason: text(args.reason, 'reason', 500) };
     },
     run: async (context, { target, duration, reason }) => ({
@@ -645,7 +675,9 @@ const TOOLS = [
     prepare: async (context, args) => {
       level(context, permissions.Level.SENIOR_MODERATOR, 'unban');
       if (!allowed(context.me, P.BanMembers)) fail('Roland does not have the Ban Members permission.');
-      return { target: await userTarget(context, args.user), reason: text(args.reason, 'reason', 500) };
+      const target = await userTarget(context, args.user);
+      if (!(await isBanned(context, target.user.id))) fail(`<@${target.user.id}> is not banned.`);
+      return { target, reason: text(args.reason, 'reason', 500) };
     },
     run: async (context, { target, reason }) => ({ case_number: (await moderation.unban({ guild: context.guild, moderator: context.actor, target, reason, channelId: context.channel.id })).case_number }),
     recheck: true,
@@ -654,6 +686,7 @@ const TOOLS = [
   }),
   definition('clear_messages', 'Delete recent messages, optionally only from one member (creates a case when targeted)', { channel: CHANNEL, amount: field('How many (1-100)', 'integer'), member: MEMBER }, ['amount'], {
     mutates: true,
+    uncertain: true,
     prepare: async (context, args) => {
       level(context, permissions.Level.MODERATOR, 'clear');
       const channel = textChannel(visible(context, await findChannel(context, args.channel, true)));
@@ -702,7 +735,9 @@ const execute = async (context, tool, prepared) => {
   try {
     result = await tool.run(context, prepared);
   } catch (error) {
-    if (await appliedDespite(context, tool, prepared)) throw new ToolError(`Discord applied it, but a later step failed: ${describeError(error)}`, 'partial', error);
+    if (error instanceof UserError || error instanceof ToolError) throw error;
+    if (tool.uncertain) throw new ToolError(`It stopped with an error and part of it may already be done: ${describeError(error)}`, 'unknown', error);
+    if (!isDiscordError(error) && (await appliedDespite(context, tool, prepared))) throw new ToolError(`Discord applied it, but a later step failed: ${describeError(error)}`, 'partial', error);
     throw error;
   }
   if (!tool.verify) return result;
@@ -712,7 +747,7 @@ const execute = async (context, tool, prepared) => {
   } catch (error) {
     throw new ToolError(`${tool.name} ran, but Roland could not check the result: ${describeError(error)}`, 'unknown', error);
   }
-  if (!confirmed) fail(`Discord did not confirm the change after ${tool.name}, so it may not have been applied.`);
+  if (!confirmed) throw new ToolError(`Discord did not confirm the change after ${tool.name}, so it may not have been applied.`, 'unknown');
   return result;
 };
 

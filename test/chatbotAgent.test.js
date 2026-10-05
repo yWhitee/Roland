@@ -544,7 +544,7 @@ test('message, member, role and channel tools validate and verify their results'
   const sent = channel.sent.find((entry) => entry.content === 'Hello @everyone');
   assert.deepEqual(sent.allowedMentions, { parse: [] }, 'tools never ping');
   assert.equal(posted.content, 'new text');
-  assert.match(reply, /`send_message` — not attempted: No channel with ID \d+ exists in this server/);
+  assert.match(reply, /`send_message` — not attempted: No channel with ID \d+ that you can view exists in this server/);
   assert.match(reply, /`set_nickname` — not attempted: The server owner cannot be changed/);
   assert.equal(member.nickname, 'Nick');
   assert.ok([...guild.roles.cache.values()].some((role) => role.name === 'Helpers' && role.permissions.bitfield === 0n), 'created roles have no permissions');
@@ -583,8 +583,8 @@ test('read-only tools run without confirmation and stay inside the guild and wha
   const [info, list, hiddenInfo, outsideInfo] = toolResults(requests[1]);
   assert.deepEqual([info.ok, info.result.id, info.result.owner_id], [true, guild.id, owner.id]);
   assert.ok(!list.result.some((entry) => entry.id === hidden.id), 'hidden channels are not listed');
-  assert.match(hiddenInfo.error, /You cannot view #hidden/);
-  assert.match(outsideInfo.error, /No channel with ID \d+ exists in this server/);
+  assert.match(hiddenInfo.error, /No channel with ID \d+ that you can view exists in this server/);
+  assert.match(outsideInfo.error, /No channel with ID \d+ that you can view exists in this server/);
   const second = toolResults(requests[2]).slice(-4);
   assert.equal(second[0].result.id, allowed.id);
   assert.ok(second[1].result.some((entry) => entry.id === allowed.id));
@@ -672,7 +672,7 @@ test('tool errors, partial execution and loops are reported honestly', async () 
   verifyFail.roles.add = async () => {};
   script({ calls: [['add_role', { member: verifyFail.id, role: vip.id }]] }, { content: 'Done!' });
   await say(guild, channel, owner, 'give VIP');
-  assert.match(lastReply(channel), /failed: Discord did not confirm the change after add_role/);
+  assert.match(lastReply(channel), /❔ Add .* — result unknown: Discord did not confirm the change after add_role/);
 });
 
 test('an Ollama failure after executed actions still reports what happened', async () => {
@@ -813,9 +813,9 @@ test('Discord and internal failures keep their real cause and unexpected ones ar
   assert.match(output.lines.join('\n'), /Chatbot tool set_slowmode failed: TypeError: boom/);
 
   failing = new Set([owner.id]);
-  requests = script({ content: 'never sent' });
+  requests = script({ calls: [['get_server_info', {}]] }, { content: 'never sent' });
   output = await quiet(() => say(guild, channel, owner, 'hello'));
-  assert.equal(requests.length, 0);
+  assert.equal(requests.length, 1, 'no tool runs without fresh member data');
   assert.match(output.lines.join('\n'), /could not load your member data \(Discord error 130000/);
   assert.equal(lastReply(channel), "Sorry, I can't answer right now. Please try again in a moment.");
 });
@@ -1085,7 +1085,7 @@ test('the server owner gets a multi-step order carried out with an honest partia
   const reply = lastReply(channel);
   assert.match(reply, /✅ Create the GuildText channel "staff" — done/);
   assert.match(reply, /✅ Change permissions of @everyone .* — deny ViewChannel — done/);
-  assert.match(reply, /✅ Change permissions of @Administrators .* — allow ViewChannel — done/);
+  assert.match(reply, new RegExp(`✅ Change permissions of <@&${administrators.id}> .* — allow ViewChannel — done`));
   assert.match(reply, /❌ Send a message in <#\d+>: "Welcome" — failed: Discord denied it: Roland is missing a permission/);
   assert.equal(toolResults(requests[3]).at(-1).status, 'failed');
 });
@@ -1127,4 +1127,185 @@ test('foreign guild clicks, duplicate deliveries, expired interactions and rate 
   script({ calls: [['add_role', { member: limited.id, role: vip.id }]] }, { content: 'ok' });
   await quiet(() => say(guild, channel, owner, 'give VIP'));
   assert.match(lastReply(channel), /❌ Add .* — failed: Discord rate limited the request/);
+});
+
+test('review regressions: overwrite tools need Manage Permissions, see fresh state and resolve roles uniquely', async () => {
+  const { guild, owner, channel } = await world();
+  const allowed = person(guild, { permissions: [P.ViewChannel, P.SendMessages, P.ManageChannels], position: 10 });
+  grant(guild, allowed);
+  await run(guild, allowed, chatbotCommand, { state: 'on' }, channel);
+  await run(guild, owner, chatbotbypass, { state: 'on' }, channel);
+  script({ calls: [['unlock_channel', { channel: channel.id }]] }, { content: 'ok' });
+  await say(guild, channel, allowed, 'unlock this');
+  assert.match(lastReply(channel), /`unlock_channel` — not attempted: You do not have the Manage Permissions permission in #agent/);
+  await run(guild, owner, chatbotCommand, { state: 'off' }, channel);
+
+  await run(guild, owner, chatbotCommand, { state: 'on' }, channel);
+  await run(guild, owner, chatbotbypass, { state: 'on' }, channel);
+  const edit = channel.permissionOverwrites.edit;
+  const queued = [];
+  channel.permissionOverwrites.edit = async (...args) => queued.push(args);
+  const fetch = guild.channels.fetch;
+  guild.channels.fetch = async (id, options) => {
+    if (id === channel.id && options?.force) for (const args of queued.splice(0)) await edit(...args);
+    return fetch(id, options);
+  };
+  makeRole(guild, { name: 'Muted', position: 3 });
+  makeRole(guild, { name: 'Muted', position: 4 });
+  script({ calls: [['lock_channel', { channel: channel.id }], ['set_channel_permissions', { channel: channel.id, target: 'Muted', deny: ['SendMessages'] }]] }, { content: 'ok' });
+  await say(guild, channel, owner, 'lock and mute');
+  assert.match(lastReply(channel), /✅ Lock <#\d+> — done/, 'Discord updates the overwrite cache later; Roland checks a fresh copy');
+  assert.match(lastReply(channel), /`set_channel_permissions` — not attempted: More than one role matches "Muted"\. Use its ID\./);
+});
+
+test('review regressions: moderation preconditions fail before anything runs and are never reported as partial', async () => {
+  const { guild, owner, channel, known } = await world();
+  const [banned, free, muted, gone] = [person(guild), person(guild), person(guild), person(guild)];
+  [banned, free, muted, gone].forEach((member) => known.set(member.id, member.user));
+  guild.banned.add(banned.id);
+  muted.state.timeoutUntil = Date.now() + 60_000;
+  gone.kick = async () => Promise.reject(apiError(10007));
+  await run(guild, owner, chatbotCommand, { state: 'on' }, channel);
+  await run(guild, owner, chatbotbypass, { state: 'on' }, channel);
+  script(
+    {
+      calls: [
+        ['ban_member', { user: banned.id, reason: 'again' }],
+        ['unban_member', { user: free.id, reason: 'nothing' }],
+        ['mute_member', { member: muted.id, duration: '10m', reason: 'again' }],
+        ['kick_member', { member: gone.id, reason: 'left' }],
+      ],
+    },
+    { content: 'ok' },
+  );
+  await say(guild, channel, owner, 'moderate');
+  const reply = lastReply(channel);
+  assert.match(reply, /`ban_member` — not attempted: <@\d+> is already banned/);
+  assert.match(reply, /`unban_member` — not attempted: <@\d+> is not banned/);
+  assert.match(reply, /`mute_member` — not attempted: <@\d+> is already timed out/);
+  assert.match(reply, /❌ Kick <@\d+> — left — failed: The member is not in the server/);
+  assert.doesNotMatch(reply, /partially done/);
+  assert.equal(punishments.countByUser(guild.id, gone.id), 0);
+
+  channel.messages.fetch = async () => Promise.reject(apiError(50001, 403));
+  script({ calls: [['clear_messages', { channel: channel.id, amount: 5 }]] }, { content: 'ok' });
+  await say(guild, channel, owner, 'clear');
+  assert.match(lastReply(channel), /❔ Clear 5 messages in <#\d+> — result unknown: It stopped with an error and part of it may already be done: Roland cannot access that channel/);
+});
+
+test('review regressions: an in-flight request keeps neither old owner powers nor a replaced session', async () => {
+  const { guild, owner, channel, known } = await world();
+  const victim = person(guild);
+  known.set(victim.id, victim.user);
+  const heir = person(guild, { permissions: ALL, position: 100 });
+  grant(guild, owner);
+  await run(guild, owner, chatbotCommand, { state: 'on' }, channel);
+  await run(guild, owner, chatbotbypass, { state: 'on' }, channel);
+  let hook = async () => {};
+  const calls = [];
+  chatbot.configure({
+    timeout: 2000,
+    fetch: async (url, options) => {
+      calls.push(JSON.parse(options.body));
+      await hook(calls.length);
+      const message = calls.length === 1 ? { role: 'assistant', content: '', tool_calls: [{ function: { name: 'kick_member', arguments: { member: victim.id, reason: 'x' } } }] } : { role: 'assistant', content: 'ok' };
+      return new Response(JSON.stringify({ message }), { status: 200, headers: { 'content-type': 'application/json' } });
+    },
+  });
+  hook = async (count) => {
+    if (count !== 1) return;
+    guild.ownerId = heir.id;
+    await guildUpdate.execute({ id: guild.id, ownerId: owner.id }, guild);
+  };
+  await say(guild, channel, owner, 'kick them');
+  assert.ok(guild.members.cache.has(victim.id) && !victim.state.kicked, 'the transfer during generation removed kick rights');
+  assert.match(lastReply(channel), /`kick_member` — not attempted: Only the server owner can use kick_member/);
+
+  guild.ownerId = owner.id;
+  const allowed = person(guild, { role: ROLES.MODERATOR, permissions: STAFF, position: 10 });
+  grant(guild, allowed);
+  const other = await channelIn(guild, 'other');
+  await run(guild, allowed, chatbotCommand, { state: 'on' }, other);
+  calls.length = 0;
+  hook = async (count) => {
+    if (count !== 1) return;
+    await run(guild, owner, chatbotperm, { user: allowed.id, enabled: false }, other);
+    await run(guild, owner, chatbotperm, { user: allowed.id, enabled: true }, other);
+    await run(guild, allowed, chatbotCommand, { state: 'on' }, other);
+  };
+  const sentBefore = other.sent.length;
+  await say(guild, other, allowed, 'kick them');
+  assert.equal(other.sent.length, sentBefore, 'the old request posts nothing into the new session');
+  assert.equal(calls.length, 1);
+  hook = async () => {};
+  await say(guild, other, allowed, 'hello again');
+  assert.ok(!JSON.stringify(calls.at(-1).messages).includes('kick them'), 'the new session starts without the old context');
+});
+
+test('review regressions: threads, hidden categories, foreign messages and rejoined members are refused', async () => {
+  const { guild, owner, channel } = await world();
+  const allowed = person(guild, { permissions: [...STAFF, P.ManageChannels], position: 10 });
+  grant(guild, allowed);
+  const thread = await channelIn(guild, 'secret-thread');
+  thread.isThread = () => true;
+  const category = await channelIn(guild, 'hidden-category');
+  category.type = 4;
+  category.permissionsFor = (member) => (member.id === allowed.id ? new PermissionsBitField() : member.permissions);
+  const log = await channel.send({ content: 'A Roland message nobody asked the chatbot for' });
+  await run(guild, allowed, chatbotCommand, { state: 'on' }, channel);
+  await run(guild, owner, chatbotbypass, { state: 'on' }, channel);
+  const requests = script(
+    {
+      calls: [
+        ['get_channels', {}],
+        ['send_message', { channel: thread.id, content: 'hi' }],
+        ['create_channel', { name: 'x', parent: category.id }],
+        ['edit_message', { channel: channel.id, message_id: log.id, content: 'changed' }],
+      ],
+    },
+    { content: 'ok' },
+  );
+  await say(guild, channel, allowed, 'try everything');
+  assert.ok(!toolResults(requests[1])[0].result.some((entry) => entry.id === thread.id || entry.id === category.id));
+  const reply = lastReply(channel);
+  assert.match(reply, /`send_message` — not attempted: Threads cannot be used through the chatbot tools/);
+  assert.match(reply, /`create_channel` — not attempted: No channel with ID \d+ that you can view exists in this server/);
+  assert.match(reply, /`edit_message` — not attempted: Only messages the chatbot sent with send_message can be edited this way/);
+
+  script({ calls: [['send_message', { channel: channel.id, content: 'mine' }]] }, { content: 'ok' });
+  await say(guild, channel, allowed, 'send');
+  const mine = channel.sent.find((entry) => entry.content === 'mine');
+  script({ calls: [['edit_message', { channel: channel.id, message_id: mine.id, content: 'edited' }]] }, { content: 'ok' });
+  await say(guild, channel, allowed, 'edit it');
+  assert.match(lastReply(channel), /✅ Edit message \d+ in <#\d+> — done/);
+
+  await run(guild, owner, chatbotbypass, { state: 'off' }, channel);
+  script({ calls: [['send_message', { channel: channel.id, content: 'later' }]] });
+  await say(guild, channel, allowed, 'send later');
+  const [approve] = buttons(confirmation(channel));
+  allowed.joinedTimestamp = Date.now() + 60_000;
+  await quiet(() => click(guild, allowed, channel, approve.custom_id));
+  assert.equal(chatbot.sessionIn(channel.id), null, 'a member who left and came back loses the old session');
+  assert.ok(!channel.sent.some((entry) => entry.content === 'later'));
+});
+
+test('review regressions: approvals run in the queue, so a newer message waits for them', async () => {
+  const { guild, owner, channel, vip } = await world();
+  const target = person(guild);
+  await run(guild, owner, chatbotCommand, { state: 'on' }, channel);
+  const requests = script({ calls: [['add_role', { member: target.id, role: vip.id }]] }, { content: 'Added.' }, { content: 'Next answer.' });
+  await say(guild, channel, owner, 'give VIP');
+  let next;
+  const add = target.roles.add;
+  target.roles.add = async (roleId) => {
+    next = say(guild, channel, owner, 'and then?');
+    await new Promise(setImmediate);
+    assert.equal(requests.length, 1, 'the new message does not reach the model during the approval');
+    return add(roleId);
+  };
+  await click(guild, owner, channel, buttons(confirmation(channel))[0].custom_id);
+  await next;
+  assert.equal(requests.length, 3);
+  assert.equal(toolResults(requests[1]).at(-1).status, 'executed');
+  assert.match(JSON.stringify(requests[2].body.messages), /and then\?/);
 });

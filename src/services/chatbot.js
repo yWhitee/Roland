@@ -59,7 +59,9 @@ const configure = ({ url, model, timeout, fetch } = {}) => {
 };
 
 const load = () => {
-  sessions = new Map(channels.listEnabled().map((row) => [row.channel_id, { guildId: row.guild_id, ownerId: row.owner_user_id, bypass: Boolean(row.bypass_enabled) }]));
+  sessions = new Map(
+    channels.listEnabled().map((row) => [row.channel_id, { guildId: row.guild_id, ownerId: row.owner_user_id, startedAt: row.enabled_at, bypass: Boolean(row.bypass_enabled) }]),
+  );
   return sessions.size;
 };
 
@@ -79,7 +81,7 @@ const isSessionOwner = (guildId, channelId, userId) => {
 
 const hasAccess = (guild, userId) => chatbotAccess.getChatbotAccess(guild, userId) !== ACCESS.NONE;
 
-const authorized = (state) => isSessionOwner(state.guildId, state.channelId, state.actorId) && hasAccess(state.guild, state.actorId);
+const authorized = (state) => sessionIn(state.channelId) === state.session && isSessionOwner(state.guildId, state.channelId, state.actorId) && hasAccess(state.guild, state.actorId);
 
 const canReply = (channel) => Boolean(channel.permissionsFor(channel.guild.members.me)?.has(REQUIRED));
 
@@ -149,7 +151,7 @@ const endChannel = (channelId) => {
 
 const enable = ({ guild, channel, ownerId, now }) => {
   const result = channels.enable({ guildId: guild.id, channelId: channel.id, ownerId, now });
-  if (result.status === 'enabled') active().set(channel.id, { guildId: guild.id, ownerId, bypass: false });
+  if (result.status === 'enabled') active().set(channel.id, { guildId: guild.id, ownerId, startedAt: result.session.enabled_at, bypass: false });
   return result;
 };
 
@@ -274,15 +276,19 @@ const typing = (channel) => {
 };
 
 const contextFor = async (state) => {
-  const session = sessionIn(state.channelId);
-  if (!session || session.guildId !== state.guildId || session.ownerId !== state.actorId) return null;
-  const access = chatbotAccess.getChatbotAccess(state.guild, state.actorId);
-  if (access === ACCESS.NONE) return null;
+  if (!authorized(state)) return null;
   const actor = await state.guild.members.fetch({ user: state.actorId, force: true }).catch((error) => {
     if (error.code === 10007) return null;
     throw new Error(`Roland could not load your member data (${tools.describeError(error)})`);
   });
   if (!actor) return null;
+  const { session } = state;
+  if (actor.joinedTimestamp > session.startedAt) {
+    await revokeUser(state.guild, state.actorId, 'its owner left and rejoined the server');
+    return null;
+  }
+  const access = chatbotAccess.getChatbotAccess(state.guild, state.actorId);
+  if (!authorized(state)) return null;
   const me = state.guild.members.me ?? (await state.guild.members.fetchMe());
   return { guild: state.guild, channel: state.channel, actor, me, access, bypass: session.bypass };
 };
@@ -384,6 +390,8 @@ const finish = async (state, text) => {
 };
 
 const confirm = async (state, calls) => {
+  if (!authorized(state)) return null;
+  await invalidate(pendingActions.close((action) => action.channelId === state.channelId && action.actorId === state.actorId, 'expired'));
   const action = pendingActions.create({
     guildId: state.guildId,
     channelId: state.channelId,
@@ -399,6 +407,7 @@ const confirm = async (state, calls) => {
     pendingActions.transition(action, 'revoked');
     throw new Error(`the confirmation request could not be posted (${error.message})`);
   }
+  if (action.status !== 'pending') await invalidate([action]);
   return null;
 };
 
@@ -408,10 +417,11 @@ const run = async (state) => {
   try {
     const deadline = Date.now() + settings.timeout;
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+      if (!authorized(state)) return null;
+      const reply = await chat(state.messages, tools.definitionsFor(chatbotAccess.getChatbotAccess(state.guild, state.actorId)), deadline);
+      if (!reply.calls.length) return await finish(state, reply.content);
       const context = await contextFor(state);
       if (!context) return null;
-      const reply = await chat(state.messages, tools.definitionsFor(context.access), deadline);
-      if (!reply.calls.length) return await finish(state, reply.content);
 
       state.messages.push({ role: 'assistant', content: reply.content, tool_calls: reply.raw });
       const waiting = [];
@@ -423,7 +433,8 @@ const run = async (state) => {
           continue;
         }
         if (!authorized(state)) return null;
-        context.bypass = Boolean(sessionIn(state.channelId)?.bypass);
+        context.access = chatbotAccess.getChatbotAccess(state.guild, state.actorId);
+        context.bypass = state.session.bypass;
         const outcome = await useTool(state, context, call);
         if (outcome) answerTool(state, call, outcome);
         else waiting.push(call);
@@ -448,10 +459,11 @@ const enqueue = (task) => {
   return next.finally(() => pending--);
 };
 
-const respond = async (message, content) => {
+const respond = async (message, content, session) => {
   const access = chatbotAccess.getChatbotAccess(message.guild, message.author.id);
   const key = `${message.guildId}:${message.channelId}:${message.author.id}`;
   const state = {
+    session,
     guild: message.guild,
     guildId: message.guildId,
     channel: message.channel,
@@ -487,7 +499,8 @@ const handleMessage = async (message) => {
     return null;
   }
   const superseded = pendingActions.close((action) => action.channelId === message.channelId && action.actorId === message.author.id, 'expired');
-  const reply = enqueue(() => respond(message, content));
+  const session = sessionIn(message.channelId);
+  const reply = enqueue(() => respond(message, content, session));
   await invalidate(superseded);
   return reply;
 };
@@ -521,32 +534,20 @@ const approveCall = async (state, call) => {
   return perform(state, context, call, prepared, 'required: approved');
 };
 
-const decide = async (interaction, action, decision) => {
+const reject = async (action) => {
   const { state } = action;
-  if (!pendingActions.transition(action, decision === 'reject' ? 'rejected' : 'approved')) {
-    await interaction.update({ embeds: [confirmationEmbed(action)], components: [] });
-    return false;
-  }
-  await refresh(action, (payload) => interaction.update(payload));
-
-  if (decision === 'reject') {
-    for (const call of action.calls) {
-      answerTool(state, call, { ok: false, status: 'rejected', error: 'The user chose not to perform this action.' });
-      record(state, call.summary, 'rejected');
-      await audit(state, { call, summary: call.summary, bypass: false, confirmation: 'required: rejected', result: 'not performed' });
-    }
-    return authorized(state);
-  }
-
-  let completed = 0;
   for (const call of action.calls) {
-    const result = await approveCall(state, call);
-    answerTool(state, call, result);
-    if (result.ok || result.status === 'partial') completed++;
+    answerTool(state, call, { ok: false, status: 'rejected', error: 'The user chose not to perform this action.' });
+    record(state, call.summary, 'rejected');
+    await audit(state, { call, summary: call.summary, bypass: false, confirmation: 'required: rejected', result: 'not performed' });
   }
-  action.status = completed ? 'executed' : 'failed';
+};
+
+const approve = async (interaction, action) => {
+  const { state } = action;
+  for (const call of action.calls) answerTool(state, call, await approveCall(state, call));
+  action.status = action.calls.some((call) => ['executed', 'partial', 'unknown'].includes(call.result.status)) ? 'executed' : 'failed';
   await refresh(action, (payload) => interaction.editReply(payload));
-  return authorized(state);
 };
 
 const handleDecision = async (interaction, decision, id) => {
@@ -556,9 +557,12 @@ const handleDecision = async (interaction, decision, id) => {
   if (interaction.user.id !== action.actorId) throw new UserError(`Only <@${action.actorId}> can answer this request.`);
   if (action.status === 'pending' && !authorized(action.state)) pendingActions.transition(action, 'revoked');
   if (action.status !== 'pending') return interaction.update({ embeds: [confirmationEmbed(action)], components: [] });
-  if (!(await decide(interaction, action, decision))) return action.status;
-  if (pending >= MAX_PENDING) await finish(action.state, "I'm busy answering other messages, so here is what happened.");
-  else await enqueue(() => run(action.state));
+  pendingActions.transition(action, decision === 'approve' ? 'approved' : 'rejected');
+  await refresh(action, (payload) => interaction.update(payload));
+  await enqueue(async () => {
+    await (decision === 'approve' ? approve(interaction, action) : reject(action));
+    return run(action.state);
+  });
   return action.status;
 };
 

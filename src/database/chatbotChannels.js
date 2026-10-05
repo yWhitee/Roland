@@ -2,7 +2,7 @@ const database = require('./index');
 
 const get = (guildId, channelId) => database.get().prepare('SELECT * FROM chatbot_channels WHERE guild_id = ? AND channel_id = ?').get(guildId, channelId);
 
-const listEnabled = () => database.get().prepare('SELECT guild_id, channel_id, owner_user_id, bypass_enabled FROM chatbot_channels WHERE enabled = 1').all();
+const listEnabled = () => database.get().prepare('SELECT guild_id, channel_id, owner_user_id, enabled_at, bypass_enabled FROM chatbot_channels WHERE enabled = 1').all();
 
 const enable = ({ guildId, channelId, ownerId, now = Date.now() }) => {
   const db = database.get();
