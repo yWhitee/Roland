@@ -37,4 +37,7 @@ const link = ({ discordId, robloxId, robloxUsername, robloxDisplayName = null, g
 const purgeExpired = (now = Date.now()) =>
   database.get().prepare('DELETE FROM verifications WHERE expires_at IS NOT NULL AND expires_at <= ?').run(now).changes;
 
-module.exports = { findByDiscord, findByRoblox, link, purgeExpired };
+const removeExpiring = (discordId) =>
+  database.get().prepare('DELETE FROM verifications WHERE discord_id = ? AND expires_at IS NOT NULL').run(discordId).changes;
+
+module.exports = { findByDiscord, findByRoblox, link, purgeExpired, removeExpiring };

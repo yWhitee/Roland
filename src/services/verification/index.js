@@ -97,6 +97,35 @@ const result = (title, lines, success = false) => ({ embeds: [resultEmbed({ titl
 
 const UNAVAILABLE = result('Verification unavailable', ['RoVer could not be reached right now. Please try again in a few minutes.']);
 
+const NOTICES = {
+  requested: [
+    'RoVer sent you a direct message asking whether this server can see your Roblox account.',
+    '',
+    '1. Open the DM from **RoVer** and click **Allow**.',
+    '2. Come back here and click **Check again**.',
+    '',
+    'Your Roblox account is only shared with this server if you allow it.',
+  ],
+  pending: ['RoVer already sent you an authorization request.', '', 'Open the DM from **RoVer**, click **Allow**, then click **Check again**.'],
+  user_not_found: ['RoVer did not find a Roblox account linked to your Discord account.', '', 'Verify your account with the **RoVer** bot, then click **Check again**.'],
+  dm_unreachable: [
+    'RoVer could not send you a direct message with the authorization request.',
+    '',
+    'Allow direct messages from this server and make sure you can receive messages from **RoVer**, then click **Check again**.',
+  ],
+};
+
+const ERRORS = {
+  member_not_in_guild: result('Verification failed', ['RoVer could not find you in this server. Please try again in a few minutes.']),
+  discord_error: result('Verification unavailable', ['RoVer could not reach Discord right now. Please try again in a few minutes.']),
+  bot_not_in_guild: result('Verification unavailable', ['Roblox verification is not available right now. Please contact a server administrator.']),
+};
+
+const LOGGED = {
+  unauthorized: 'RoVer rejected ROVER_API_KEY. Check the key in .env.',
+  bot_not_in_guild: 'RoVer is not in this server. Add the RoVer bot so it can send authorization requests.',
+};
+
 const describeUpdates = (updates) => {
   if (!updates.member) return ['You are no longer a member of the server, so the Member role and nickname could not be applied.'];
   return [
@@ -107,22 +136,35 @@ const describeUpdates = (updates) => {
 
 const failure = (error, replace, now) => {
   if (!(error instanceof rover.RoverError)) throw error;
-  if (error.kind === 'not_linked') return consentMessage(replace);
+  if (NOTICES[error.kind]) return consentMessage(NOTICES[error.kind], replace);
   if (error.kind === 'rate_limited') {
     blockedUntil = Math.max(blockedUntil, now + error.retryAfter);
     return result('Too many requests', [`RoVer is receiving too many requests. Please try again ${relative(blockedUntil)}.`]);
   }
-  console.error(error.kind === 'unauthorized' ? 'RoVer rejected ROVER_API_KEY. Check the key in .env.' : `RoVer lookup failed: ${error.message}`);
-  return UNAVAILABLE;
+  if (error.kind !== 'member_not_in_guild') console.error(LOGGED[error.kind] ?? `RoVer lookup failed: ${error.message}`);
+  return ERRORS[error.kind] ?? UNAVAILABLE;
+};
+
+const find = async (guildId, discordId) => {
+  try {
+    return { account: await rover.lookup(settings, guildId, discordId) };
+  } catch (error) {
+    if (!(error instanceof rover.RoverError) || error.kind !== 'user_not_found') throw error;
+  }
+  verifications.removeExpiring(discordId);
+  const access = await rover.requestAccess(settings, guildId, discordId);
+  return access === 'authorized' ? { account: await rover.lookup(settings, guildId, discordId) } : { access };
 };
 
 const verify = async (interaction, replace, now) => {
-  let account;
+  let found;
   try {
-    account = await rover.lookup(settings, interaction.guildId, interaction.user.id);
+    found = await find(interaction.guildId, interaction.user.id);
   } catch (error) {
     return failure(error, replace, now);
   }
+  if (found.access) return consentMessage(NOTICES[found.access], replace);
+  const { account } = found;
 
   const { status, verification, previous } = verifications.link({
     discordId: interaction.user.id,
@@ -144,7 +186,7 @@ const verify = async (interaction, replace, now) => {
   }
 
   const updates = await applyMemberUpdates(interaction.guild, interaction.user.id, verification.roblox_username);
-  if (status !== 'already-verified') await logging.sendEmbed(interaction.guild, logEmbed(verification, updates, previous));
+  if (status !== 'already-verified') await logging.sendEmbed(interaction.guild, logEmbed(verification, updates, Boolean(previous)));
 
   const titles = { linked: 'Verification successful', relinked: 'Roblox account updated', 'already-verified': 'You are already verified' };
   return result(titles[status], [
@@ -173,8 +215,9 @@ const start = async (interaction, { replace = false, update = false, now = Date.
 const cleanup = (now = Date.now()) => verifications.purgeExpired(now);
 
 const startCleanup = () => {
-  cleanup();
-  setInterval(() => cleanup(), CLEANUP_INTERVAL).unref();
+  const run = () => cleanup(Date.now() + CLEANUP_INTERVAL);
+  run();
+  setInterval(run, CLEANUP_INTERVAL).unref();
 };
 
 module.exports = { MEMBER_ROLE, RETENTION, configure, isConfigured, publishPanel, start, buildNickname, cleanup, startCleanup };

@@ -19,16 +19,42 @@ const file = tempDatabase();
 const MEMBER_ROLE = '1555596685462479048';
 const API_KEY = 'test-rover-key';
 
-const respond = (status, body, headers = {}) => ({ ok: status >= 200 && status < 300, status, headers: new Headers(headers), json: async () => body });
+const JSON_TYPE = 'application/json;charset=UTF-8';
+
+const respond = (status, body, headers = {}) => ({
+  ok: status >= 200 && status < 300,
+  status,
+  headers: new Headers({ 'content-type': JSON_TYPE, ...headers }),
+  json: async () => body,
+});
+
+const html = (status) => ({
+  ok: false,
+  status,
+  headers: new Headers({ 'content-type': 'text/html; charset=UTF-8' }),
+  json: async () => {
+    throw new SyntaxError('Unexpected token < in JSON');
+  },
+});
 
 const fakeRover = () => {
-  const rover = { accounts: {}, failure: null, offline: false, calls: [] };
+  const rover = { accounts: {}, requests: new Set(), failure: null, offline: false, calls: [] };
   rover.fetch = async (url, options = {}) => {
-    rover.calls.push({ url, authorization: options.headers?.authorization });
+    const method = options.method ?? 'GET';
+    rover.calls.push({ method, url, authorization: options.headers?.authorization });
     if (rover.offline) throw new Error('getaddrinfo ENOTFOUND registry.rover.link');
-    if (rover.failure) return respond(rover.failure.status, rover.failure.body ?? { errorCode: 'error', message: 'Error' }, rover.failure.headers);
-    const [, guildId, discordId] = url.match(/\/guilds\/(\d+)\/discord-to-roblox\/(\d+)$/);
+    const failure = typeof rover.failure === 'function' ? rover.failure(method) : rover.failure;
+    if (failure?.html) return html(failure.status);
+    if (failure) return respond(failure.status, failure.body ?? { errorCode: 'error', message: 'Error' }, failure.headers);
+
+    const [, guildId, route, discordId] = url.match(/\/guilds\/(\d+)\/(discord-to-roblox|access-requests)\/(\d+)$/);
     const account = rover.accounts[discordId];
+    if (route === 'access-requests') {
+      if (account) return respond(200, { status: 'already_authorized' });
+      if (rover.requests.has(discordId)) return respond(200, { status: 'pending' });
+      rover.requests.add(discordId);
+      return respond(201, { status: 'pending' });
+    }
     return account
       ? respond(200, { robloxId: Number(account.id), cachedUsername: account.username, discordId, guildId })
       : respond(404, { errorCode: 'user_not_found', message: 'User not found' });
@@ -216,7 +242,7 @@ test('the verify button finds the Roblox account through RoVer and links it with
   rover.accounts[member.id] = { id: '1001', username: 'cool_player123' };
 
   const { interaction, reply } = await press(guild, member);
-  assert.deepEqual(rover.calls, [{ url: `https://registry.rover.link/api/guilds/${guild.id}/discord-to-roblox/${member.id}`, authorization: `Bearer ${API_KEY}` }]);
+  assert.deepEqual(rover.calls, [{ method: 'GET', url: `https://registry.rover.link/api/guilds/${guild.id}/discord-to-roblox/${member.id}`, authorization: `Bearer ${API_KEY}` }]);
   assert.ok(interaction.calls.deferred.flags, 'the answer is private');
 
   const embed = embedOf(reply);
@@ -235,21 +261,33 @@ test('the verify button finds the Roblox account through RoVer and links it with
   assert.ok(!JSON.stringify([embed, log]).includes(API_KEY), 'the API key is never shown');
 });
 
-test('members who are not verified with RoVer or did not grant access get instructions and a Check again button', async () => {
-  for (const failure of [null, { status: 403, body: { errorCode: 'forbidden', message: 'No access' } }]) {
-    const { guild, rover } = setup();
-    rover.failure = failure;
-    const member = join(guild);
+test('members without consent get a RoVer access request and a Check again button, and a 403 is not treated as missing consent', async () => {
+  const { guild, rover } = setup();
+  const member = join(guild);
 
-    const { reply } = await press(guild, member);
-    const embed = embedOf(reply);
-    assert.match(embed.description, /RoVer has not shared a Roblox account with this server for you yet/);
-    assert.match(embed.description, /`\/verify` command of the \*\*RoVer\*\* bot/);
-    assert.match(embed.description, /`\/privacy`/);
-    assert.deepEqual(buttonsOf(reply).map((button) => [button.custom_id, button.label]), [['verify:check', 'Check again']]);
-    assert.equal(verifications.findByDiscord(member.id), undefined);
-    assert.ok(!member.roles.cache.has(MEMBER_ROLE));
+  const { reply } = await press(guild, member);
+  assert.deepEqual(rover.calls.map((call) => `${call.method} ${call.url}`), [
+    `GET https://registry.rover.link/api/guilds/${guild.id}/discord-to-roblox/${member.id}`,
+    `PUT https://registry.rover.link/api/guilds/${guild.id}/access-requests/${member.id}`,
+  ]);
+  const embed = embedOf(reply);
+  assert.match(embed.description, /RoVer sent you a direct message/);
+  assert.match(embed.description, /click \*\*Allow\*\*/);
+  assert.deepEqual(buttonsOf(reply).map((button) => [button.custom_id, button.label]), [['verify:check', 'Check again']]);
+  assert.equal(verifications.findByDiscord(member.id), undefined);
+  assert.ok(!member.roles.cache.has(MEMBER_ROLE));
+
+  const { guild: other, rover: forbidden } = setup();
+  forbidden.failure = { status: 403, body: { errorCode: 'forbidden', message: 'No access' } };
+  const original = console.error;
+  console.error = () => {};
+  try {
+    const denied = await press(other, join(other));
+    assert.equal(embedOf(denied.reply).title, 'Verification unavailable');
+  } finally {
+    console.error = original;
   }
+  assert.deepEqual(forbidden.calls.map((call) => call.method), ['GET'], 'no access request without a documented errorCode');
 });
 
 test('Check again verifies after the member grants access, updating the same private message', async () => {
@@ -267,23 +305,24 @@ test('Check again verifies after the member grants access, updating the same pri
   assert.equal(member.nickname, 'Whitee (@granted_user)');
 
   const { reply } = await press(guild, join(guild), 'verify:check');
-  assert.match(embedOf(reply).description, /has not shared a Roblox account/, 'the button itself is wired');
+  assert.match(embedOf(reply).description, /RoVer sent you a direct message/, 'the button itself is wired');
 });
 
 test('checks have a per-member cooldown so RoVer is never polled', async () => {
   const { guild, rover } = setup();
   const member = join(guild);
   const now = later();
+  const lookups = () => rover.calls.filter((call) => call.method === 'GET').length;
 
   await verification.start(makeInteraction({ guild, member }), { now });
   await assert.rejects(verification.start(makeInteraction({ guild, member }), { update: true, now: now + 5_000 }), /wait a few seconds/);
-  assert.equal(rover.calls.length, 1);
+  assert.equal(lookups(), 1);
 
   await verification.start(makeInteraction({ guild, member: join(guild) }), { now: now + 5_000 });
-  assert.equal(rover.calls.length, 2, 'other members are not affected');
+  assert.equal(lookups(), 2, 'other members are not affected');
 
   await verification.start(makeInteraction({ guild, member }), { update: true, now: now + 10_000 });
-  assert.equal(rover.calls.length, 3);
+  assert.equal(lookups(), 3);
 });
 
 test('a 429 from RoVer pauses every lookup until the rate limit resets', async () => {
@@ -445,7 +484,8 @@ test('/verify can be used by every member, staff or not', async () => {
     assert.ok(interaction.calls.deferred.flags, `${role}: private reply`);
     assert.deepEqual(buttonsOf(reply).map((button) => button.custom_id), ['verify:check:relink'], `${role}: asked to use RoVer`);
   }
-  assert.equal(rover.calls.length, ranks.length);
+  assert.equal(rover.calls.filter((call) => call.method === 'GET').length, ranks.length);
+  assert.equal(rover.calls.filter((call) => call.method === 'PUT').length, ranks.length);
 });
 
 test('/verify replaces the linked Roblox account with the one RoVer now reports', async () => {
@@ -510,3 +550,234 @@ test('data from RoVer expires after the retention period and is refreshed by a n
   assert.ok(member.roles.cache.has(MEMBER_ROLE), 'the Member role stays');
 });
 
+const quiet = async (task) => {
+  const lines = [];
+  const original = { log: console.log, warn: console.warn, error: console.error };
+  console.log = console.warn = console.error = (...args) => lines.push(args.join(' '));
+  try {
+    return { result: await task(), lines };
+  } finally {
+    Object.assign(console, original);
+  }
+};
+
+const methods = (rover) => rover.calls.map((call) => call.method);
+
+test('access request 201 pending: RoVer is asked once, with an empty body, and the member is told to click Allow', async () => {
+  const { guild, rover } = setup();
+  const seen = [];
+  verification.configure({ apiKey: API_KEY, fetch: (url, options) => seen.push(options) && rover.fetch(url, options) });
+  const member = join(guild);
+
+  const interaction = makeInteraction({ guild, member });
+  await verification.start(interaction, { now: later() });
+  assert.deepEqual(methods(rover), ['GET', 'PUT']);
+  assert.equal(rover.calls[1].url, `https://registry.rover.link/api/guilds/${guild.id}/access-requests/${member.id}`);
+  assert.equal(rover.calls[1].authorization, `Bearer ${API_KEY}`);
+  assert.equal(seen[1].body, undefined, 'no callbackUrl is sent');
+  assert.ok(interaction.calls.deferred.flags, 'private reply');
+  const embed = embedOf(interaction.calls.replies[0]);
+  assert.match(embed.description, /^RoVer sent you a direct message asking whether this server can see your Roblox account\./);
+  assert.match(embed.description, /Open the DM from \*\*RoVer\*\* and click \*\*Allow\*\*/);
+});
+
+test('access request 200 pending: a repeated click reports the pending request without a new DM', async () => {
+  const { guild, rover } = setup();
+  const member = join(guild);
+  await verification.start(makeInteraction({ guild, member }), { now: later() });
+
+  const again = makeInteraction({ guild, member });
+  await verification.start(again, { update: true, now: later() });
+  assert.deepEqual(methods(rover), ['GET', 'PUT', 'GET', 'PUT']);
+  assert.equal(rover.requests.size, 1, 'RoVer created only one request');
+  assert.match(embedOf(again.calls.replies[0]).description, /^RoVer already sent you an authorization request\./);
+  assert.deepEqual(buttonsOf(again.calls.replies[0]).map((button) => button.custom_id), ['verify:check']);
+});
+
+test('access request already_authorized: the account is looked up again right away and verified', async () => {
+  const { guild, rover } = setup();
+  const member = join(guild);
+  rover.accounts[member.id] = { id: '1501', username: 'authorized_user' };
+  let hidden = true;
+  rover.failure = (method) => (method === 'GET' && hidden && !(hidden = false) ? { status: 404, body: { errorCode: 'user_not_found' } } : null);
+
+  const interaction = makeInteraction({ guild, member });
+  await verification.start(interaction, { now: later() });
+  assert.deepEqual(methods(rover), ['GET', 'PUT', 'GET']);
+  assert.equal(embedOf(interaction.calls.replies[0]).title, 'Verification successful');
+  assert.equal(member.nickname, 'Whitee (@authorized_user)');
+
+  const { guild: other, rover: unlinked } = setup();
+  unlinked.failure = (method) => (method === 'GET' ? { status: 404, body: { errorCode: 'user_not_found' } } : { status: 200, body: { status: 'already_authorized' } });
+  const stuck = makeInteraction({ guild: other, member: join(other) });
+  await verification.start(stuck, { now: later() });
+  assert.deepEqual(methods(unlinked), ['GET', 'PUT', 'GET'], 'no loop when RoVer has no account');
+  assert.match(embedOf(stuck.calls.replies[0]).description, /RoVer did not find a Roblox account linked to your Discord account/);
+});
+
+test('a member who allows the request is verified on Check again with the Roblox ID and username from RoVer', async () => {
+  const { guild, rover } = setup();
+  const member = join(guild);
+  await verification.start(makeInteraction({ guild, member }), { now: later() });
+  assert.equal(verifications.findByDiscord(member.id), undefined);
+
+  rover.accounts[member.id] = { id: '1502', username: 'allowed_user' };
+  const check = makeInteraction({ guild, member, customId: 'verify:check' });
+  await verification.start(check, { update: true, now: later() });
+  assert.deepEqual(methods(rover), ['GET', 'PUT', 'GET']);
+  assert.equal(check.calls.deferred, 'update', 'Check again edits the same private message');
+  const embed = embedOf(check.calls.replies[0]);
+  assert.equal(embed.title, 'Verification successful');
+  assert.match(embed.description, /^Roblox username: allowed_user\nRoblox ID: 1502/);
+  const stored = verifications.findByDiscord(member.id);
+  assert.deepEqual([stored.roblox_id, stored.roblox_username], ['1502', 'allowed_user']);
+  assert.ok(member.roles.cache.has(MEMBER_ROLE));
+  assert.equal(member.nickname, 'Whitee (@allowed_user)');
+});
+
+test('nothing polls RoVer: requests only happen when the member clicks', async () => {
+  const { guild, rover } = setup();
+  const member = join(guild);
+  await verification.start(makeInteraction({ guild, member }), { now: later() });
+  const sent = rover.calls.length;
+  rover.accounts[member.id] = { id: '1503', username: 'waiting_user' };
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(rover.calls.length, sent);
+  assert.equal(verifications.findByDiscord(member.id), undefined);
+});
+
+test('dm_unreachable tells the member that RoVer could not DM them', async () => {
+  const { guild, rover } = setup();
+  rover.failure = (method) => (method === 'PUT' ? { status: 400, body: { errorCode: 'dm_unreachable', message: 'Cannot DM' } } : null);
+  const { result, lines } = await quiet(() => press(guild, join(guild)));
+  const embed = embedOf(result.reply);
+  assert.match(embed.description, /RoVer could not send you a direct message/);
+  assert.match(embed.description, /Allow direct messages from this server and make sure you can receive messages from \*\*RoVer\*\*/);
+  assert.deepEqual(buttonsOf(result.reply).map((button) => button.custom_id), ['verify:check']);
+  assert.deepEqual(lines, []);
+});
+
+test('member_not_in_guild, bot_not_in_guild, discord_error and bad_request are handled explicitly', async () => {
+  const cases = {
+    member_not_in_guild: ['Verification failed', /could not find you in this server/, null],
+    bot_not_in_guild: ['Verification unavailable', /contact a server administrator/, 'RoVer is not in this server. Add the RoVer bot so it can send authorization requests.'],
+    discord_error: ['Verification unavailable', /could not reach Discord/, 'RoVer lookup failed: RoVer access request responded with 500 (discord_error)'],
+    bad_request: ['Verification unavailable', /could not be reached right now/, 'RoVer lookup failed: RoVer access request responded with 400 (bad_request)'],
+  };
+  for (const [code, [title, description, logged]] of Object.entries(cases)) {
+    const { guild, rover } = setup();
+    rover.failure = (method) => (method === 'PUT' ? { status: code === 'discord_error' ? 500 : 400, body: { errorCode: code, message: code } } : null);
+    const { result, lines } = await quiet(() => press(guild, join(guild)));
+    const embed = embedOf(result.reply);
+    assert.equal(embed.title, title, code);
+    assert.match(embed.description, description, code);
+    assert.deepEqual(lines, logged ? [logged] : [], code);
+  }
+});
+
+test('429 and discord_rate_limit on the access request stop every request until Retry-After', async () => {
+  for (const failure of [{ status: 429, body: { message: 'Too many requests' }, headers: { 'retry-after': '7' } }, { status: 500, body: { errorCode: 'discord_rate_limit' }, headers: { 'retry-after': '3' } }]) {
+    const { guild, rover } = setup();
+    rover.failure = (method) => (method === 'PUT' ? failure : null);
+    const now = later();
+    const seconds = Number(failure.headers['retry-after']);
+
+    const interaction = makeInteraction({ guild, member: join(guild) });
+    await verification.start(interaction, { now });
+    assert.equal(embedOf(interaction.calls.replies[0]).title, 'Too many requests');
+    assert.match(embedOf(interaction.calls.replies[0]).description, new RegExp(`<t:${Math.ceil((now + seconds * 1000) / 1000)}:R>`));
+
+    await assert.rejects(verification.start(makeInteraction({ guild, member: join(guild) }), { now: now + seconds * 1000 - 1 }), /too many requests/);
+    assert.deepEqual(methods(rover), ['GET', 'PUT'], 'no immediate retry');
+
+    rover.failure = null;
+    await verification.start(makeInteraction({ guild, member: join(guild) }), { now: now + seconds * 1000 });
+    assert.equal(rover.calls.length, 4);
+  }
+});
+
+test('JSON errors are read only with a JSON Content-Type', async () => {
+  const { guild, rover } = setup();
+  rover.failure = { status: 404, body: { errorCode: 'user_not_found' }, headers: { 'content-type': 'text/plain' } };
+  const { result, lines } = await quiet(() => press(guild, join(guild)));
+  assert.equal(embedOf(result.reply).title, 'Verification unavailable');
+  assert.deepEqual(methods(rover), ['GET'], 'an errorCode is not trusted without a JSON Content-Type');
+  assert.deepEqual(lines, ['RoVer lookup failed: RoVer responded with 404']);
+});
+
+test('a Cloudflare HTML response does not crash verification', async () => {
+  for (const [status, method] of [[502, 'GET'], [403, 'GET'], [503, 'PUT']]) {
+    const { guild, rover } = setup();
+    rover.failure = (requested) => (requested === method ? { html: true, status } : null);
+    const member = join(guild);
+    const { result, lines } = await quiet(() => press(guild, member));
+    assert.equal(embedOf(result.reply).title, 'Verification unavailable');
+    assert.match(lines[0], new RegExp(`responded with ${status}$`));
+    assert.equal(verifications.findByDiscord(member.id), undefined);
+  }
+});
+
+test('the API key never appears in replies or console output', async () => {
+  const outputs = [];
+  for (const failure of [null, { status: 401, body: { errorCode: 'unauthorized' } }, { status: 500, body: { errorCode: 'bad_request' } }, { html: true, status: 502 }]) {
+    const { guild, rover } = setup();
+    rover.failure = failure;
+    const member = join(guild);
+    rover.accounts[member.id] = { id: String(1600 + outputs.length), username: 'key_check_user' };
+    const { result, lines } = await quiet(() => press(guild, member));
+    outputs.push(JSON.stringify(result.reply.embeds.map((embed) => embed.toJSON())), ...lines, ...guild.logChannel.sent.map((message) => JSON.stringify(message.embeds)));
+  }
+  assert.ok(outputs.length > 4);
+  assert.ok(!outputs.join('\n').includes(API_KEY));
+});
+
+test('data from the RoVer API is kept for at most 30 days', async () => {
+  assert.equal(verification.RETENTION, 30 * 24 * 60 * 60 * 1000);
+  const { guild, rover } = setup();
+  const member = join(guild);
+  rover.accounts[member.id] = { id: '1701', username: 'thirty_days' };
+  const now = later();
+  await verification.start(makeInteraction({ guild, member }), { now });
+  const stored = verifications.findByDiscord(member.id);
+  assert.equal(stored.verified_at, now);
+  assert.equal(stored.expires_at, now + verification.RETENTION);
+});
+
+test('expired RoVer data is deleted before it outlives 30 days, and a missing account removes stored RoVer data', async () => {
+  assert.equal(database.get().pragma('secure_delete', { simple: true }), 1, 'deleted rows are overwritten on disk');
+  verifications.link({ discordId: 'expiring-soon', robloxId: '1801', robloxUsername: 'soon', expiresAt: Date.now() + 30 * 60_000 });
+  verifications.link({ discordId: 'expiring-later', robloxId: '1802', robloxUsername: 'later', expiresAt: Date.now() + verification.RETENTION });
+  verifications.link({ discordId: 'from-oauth', robloxId: '1803', robloxUsername: 'oauth' });
+
+  verification.startCleanup();
+  assert.equal(verifications.findByDiscord('expiring-soon'), undefined, 'removed before the next hourly cleanup would be too late');
+  assert.ok(verifications.findByDiscord('expiring-later'));
+  assert.ok(verifications.findByDiscord('from-oauth'), 'links made by the old OAuth flow are not RoVer data');
+
+  const { guild, rover } = setup();
+  const member = join(guild);
+  rover.accounts[member.id] = { id: '1804', username: 'revoked_user' };
+  await verification.start(makeInteraction({ guild, member }), { now: later() });
+  delete rover.accounts[member.id];
+  const relink = makeInteraction({ guild, member });
+  await verification.start(relink, { replace: true, now: later() });
+  assert.equal(verifications.findByDiscord(member.id), undefined, 'RoVer no longer returns the account, so its data is not kept');
+  assert.match(embedOf(relink.calls.replies[0]).description, /RoVer sent you a direct message/);
+});
+
+test('the Roblox ID and username from RoVer never reach the permanent verification log or the console', async () => {
+  const { guild, rover } = setup();
+  const member = join(guild);
+  rover.accounts[member.id] = { id: '1901', username: 'private_first' };
+  const { lines } = await quiet(async () => {
+    await verification.start(makeInteraction({ guild, member }), { now: later() });
+    rover.accounts[member.id] = { id: '1902', username: 'private_second' };
+    await verification.start(makeInteraction({ guild, member }), { replace: true, now: later() });
+  });
+
+  const logs = guild.logChannel.sent.map((message) => message.embeds[0].toJSON());
+  assert.deepEqual(logs.map((log) => log.title), ['Verification • Roblox account linked', 'Verification • Roblox account changed']);
+  assert.deepEqual(logs[1].fields.map((field) => field.name), ['Discord user', 'Member role', 'Nickname', 'Timestamp']);
+  const permanent = JSON.stringify(logs) + lines.join('\n');
+  for (const value of ['1901', '1902', 'private_first', 'private_second']) assert.ok(!permanent.includes(value), value);
+});

@@ -181,6 +181,7 @@ const open = (file = DEFAULT_PATH) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   db = new Database(file);
   db.pragma('journal_mode = WAL');
+  db.pragma('secure_delete = ON');
 
   const version = db.pragma('user_version', { simple: true });
   migrations.slice(version).forEach((sql, index) => {
