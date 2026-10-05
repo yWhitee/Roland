@@ -34,10 +34,13 @@ const link = ({ discordId, robloxId, robloxUsername, robloxDisplayName = null, g
   }).immediate();
 };
 
+const manageNickname = (discordId, previousNickname) =>
+  database.get().prepare('UPDATE verifications SET nickname_managed = 1, previous_nickname = ? WHERE discord_id = ? AND nickname_managed = 0').run(previousNickname, discordId);
+
 const purgeExpired = (now = Date.now()) =>
-  database.get().prepare('DELETE FROM verifications WHERE expires_at IS NOT NULL AND expires_at <= ?').run(now).changes;
+  database.get().prepare('DELETE FROM verifications WHERE expires_at IS NOT NULL AND expires_at <= ? RETURNING *').all(now);
 
 const removeExpiring = (discordId) =>
-  database.get().prepare('DELETE FROM verifications WHERE discord_id = ? AND expires_at IS NOT NULL').run(discordId).changes;
+  database.get().prepare('DELETE FROM verifications WHERE discord_id = ? AND expires_at IS NOT NULL RETURNING *').get(discordId);
 
-module.exports = { findByDiscord, findByRoblox, link, purgeExpired, removeExpiring };
+module.exports = { findByDiscord, findByRoblox, link, manageNickname, purgeExpired, removeExpiring };

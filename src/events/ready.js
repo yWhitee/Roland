@@ -16,7 +16,7 @@ module.exports = {
     tempBans.start(client);
     automod.start(client);
     levels.start();
-    verification.startCleanup();
+    verification.startCleanup(client);
 
     if (client.application.id !== config.clientId) console.warn(`DISCORD_CLIENT_ID ${config.clientId} does not match the bot's application ${client.application.id}.`);
     const { guild, global } = await registerCommands(client.rest, { clientId: client.application.id, guildId: config.guildId, commands: [...client.commands.values()] });

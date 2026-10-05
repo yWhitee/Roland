@@ -135,6 +135,25 @@ test('an existing version 7 database drops the Roblox OAuth states and keeps ver
   database.open(file);
 });
 
+test('an existing version 8 database marks RoVer links so their nicknames are restored when they expire', () => {
+  const legacy = tempDatabase();
+  const db = new Database(legacy);
+  database.migrations.slice(0, 8).forEach((sql) => db.exec(sql));
+  db.pragma('user_version = 8');
+  db.prepare("INSERT INTO verifications (discord_id, roblox_id, roblox_username, verified_at, expires_at) VALUES ('rover', '1', 'from_rover', 1, 2)").run();
+  db.prepare("INSERT INTO verifications (discord_id, roblox_id, roblox_username, verified_at) VALUES ('oauth', '2', 'from_oauth', 1)").run();
+  db.close();
+
+  database.open(legacy);
+  assert.equal(database.get().pragma('user_version', { simple: true }), database.migrations.length);
+  const rows = database.get().prepare('SELECT discord_id, nickname_managed, previous_nickname FROM verifications ORDER BY discord_id').all().map((row) => ({ ...row }));
+  assert.deepEqual(rows, [
+    { discord_id: 'oauth', nickname_managed: 0, previous_nickname: null },
+    { discord_id: 'rover', nickname_managed: 1, previous_nickname: null },
+  ]);
+  database.open(file);
+});
+
 test('punishment records survive a restart', () => {
   const ban = punishments.create({ type: 'ban', guildId: 'g', userId: 'u', moderatorId: 'm', reason: 'r', duration: '7d', expiresAt: 1000, active: true, channelId: 'c' });
   const clear = punishments.create({ type: 'clear', guildId: 'g', userId: 'u', moderatorId: 'm', channelId: 'c', metadata: { requested: 50, deleted: 42 } });

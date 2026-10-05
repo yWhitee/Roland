@@ -167,6 +167,9 @@ const migrations = [
   `UPDATE levels SET xp = 19999 WHERE xp > 19999;`,
   `DROP TABLE oauth_states;
   ALTER TABLE verifications ADD COLUMN expires_at INTEGER;`,
+  `ALTER TABLE verifications ADD COLUMN nickname_managed INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE verifications ADD COLUMN previous_nickname TEXT;
+  UPDATE verifications SET nickname_managed = 1 WHERE expires_at IS NOT NULL;`,
 ];
 
 let db;

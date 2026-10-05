@@ -781,3 +781,132 @@ test('the Roblox ID and username from RoVer never reach the permanent verificati
   const permanent = JSON.stringify(logs) + lines.join('\n');
   for (const value of ['1901', '1902', 'private_first', 'private_second']) assert.ok(!permanent.includes(value), value);
 });
+const clientFor = (guild) => ({ guilds: { cache: new Map([[guild.id, guild]]) } });
+
+const verifyAs = async (guild, rover, member, account, options = {}) => {
+  rover.accounts[member.id] = account;
+  const interaction = makeInteraction({ guild, member });
+  await verification.start(interaction, { now: later(), ...options });
+  return interaction;
+};
+
+test('the nickname is applied after verification and Roland records that it set it', async () => {
+  const { guild, rover } = setup();
+  const member = join(guild);
+  await verifyAs(guild, rover, member, { id: '2001', username: 'nick_user' });
+
+  assert.equal(member.nickname, 'Whitee (@nick_user)');
+  const stored = verifications.findByDiscord(member.id);
+  assert.deepEqual([stored.nickname_managed, stored.previous_nickname], [1, null]);
+});
+
+test('the previous nickname is kept across a change of Roblox account', async () => {
+  const { guild, rover } = setup();
+  const member = join(guild);
+  member.nickname = 'Custom Nick';
+  await verifyAs(guild, rover, member, { id: '2101', username: 'first_name' });
+  assert.equal(member.nickname, 'Whitee (@first_name)');
+  assert.equal(verifications.findByDiscord(member.id).previous_nickname, 'Custom Nick');
+
+  await verifyAs(guild, rover, member, { id: '2102', username: 'second_name' }, { replace: true });
+  assert.equal(member.nickname, 'Whitee (@second_name)');
+  assert.equal(verifications.findByDiscord(member.id).previous_nickname, 'Custom Nick', 'not replaced by the earlier RoVer nickname');
+});
+
+test('when RoVer data expires the previous nickname, or the Discord default, is restored', async () => {
+  const { guild, rover } = setup();
+  const named = join(guild);
+  named.nickname = 'Custom Nick';
+  const unnamed = join(guild);
+  const now = later();
+  await verifyAs(guild, rover, named, { id: '2201', username: 'expiring_one' }, { now });
+  await verifyAs(guild, rover, unnamed, { id: '2202', username: 'expiring_two' }, { now });
+
+  await verification.cleanup(now + verification.RETENTION, clientFor(guild));
+  assert.equal(named.nickname, 'Custom Nick');
+  assert.equal(unnamed.nickname, null, 'no previous nickname: back to the Discord default');
+  assert.equal(verifications.findByDiscord(named.id), undefined);
+  assert.equal(verifications.findByDiscord(unnamed.id), undefined);
+  assert.ok(named.roles.cache.has(MEMBER_ROLE), 'the Member role stays');
+});
+
+test('user_not_found restores the previous nickname and clears the stored RoVer data', async () => {
+  const { guild, rover } = setup();
+  const member = join(guild);
+  member.nickname = 'Before';
+  await verifyAs(guild, rover, member, { id: '2301', username: 'gone_user' });
+  assert.equal(member.nickname, 'Whitee (@gone_user)');
+
+  delete rover.accounts[member.id];
+  const relink = makeInteraction({ guild, member });
+  await verification.start(relink, { replace: true, now: later() });
+  assert.equal(member.nickname, 'Before');
+  assert.equal(verifications.findByDiscord(member.id), undefined);
+  assert.equal(rover.calls.at(-1).method, 'PUT', 'consent is requested again');
+});
+
+test('verifying again after expiry looks RoVer up again, reapplies the nickname and renews 30 days', async () => {
+  const { guild, rover } = setup();
+  const member = join(guild);
+  member.nickname = 'Custom Nick';
+  const first = later();
+  await verifyAs(guild, rover, member, { id: '2401', username: 'old_name' }, { now: first });
+  await verification.cleanup(first + verification.RETENTION, clientFor(guild));
+  assert.equal(member.nickname, 'Custom Nick');
+
+  const lookups = rover.calls.length;
+  const second = first + verification.RETENTION + 60_000;
+  await verifyAs(guild, rover, member, { id: '2401', username: 'renamed_user' }, { now: second });
+  assert.equal(rover.calls.length, lookups + 1);
+  assert.equal(member.nickname, 'Whitee (@renamed_user)');
+  const stored = verifications.findByDiscord(member.id);
+  assert.deepEqual([stored.roblox_username, stored.expires_at, stored.previous_nickname], ['renamed_user', second + verification.RETENTION, 'Custom Nick']);
+});
+
+test('the RoVer username is not kept anywhere once its data is removed', async () => {
+  const { guild, rover } = setup();
+  const member = join(guild);
+  member.nickname = 'Someone (@stale_name)';
+  const now = later();
+  await verifyAs(guild, rover, member, { id: '2501', username: 'secret_name' }, { now });
+  assert.equal(verifications.findByDiscord(member.id).previous_nickname, null, 'a nickname with a Roblox username is never saved as the previous one');
+
+  await verification.cleanup(now + verification.RETENTION, clientFor(guild));
+  assert.equal(member.nickname, null);
+  const db = database.get();
+  const dump = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map(({ name }) => JSON.stringify(db.prepare(`SELECT * FROM "${name}"`).all())).join('\n');
+  for (const value of ['secret_name', 'stale_name']) assert.ok(!dump.includes(value), value);
+  assert.equal(verifications.findByRoblox('2501'), undefined);
+});
+
+test('cleanup keeps nicknames changed by the member and survives members who left or permission errors', async () => {
+  const { guild, rover } = setup();
+  const renamed = join(guild);
+  const left = join(guild);
+  const locked = join(guild);
+  locked.nickname = 'Locked';
+  const now = later();
+  for (const [member, name] of [[renamed, 'manual_case'], [left, 'left_case'], [locked, 'locked_case']]) {
+    await verifyAs(guild, rover, member, { id: String(2600 + rover.calls.length), username: name }, { now });
+  }
+  renamed.nickname = 'My own nickname';
+  guild.members.cache.delete(left.id);
+  locked.setNickname = async () => Promise.reject(Object.assign(new Error('Missing Permissions'), { code: 50013 }));
+
+  const { result, lines } = await quiet(() => verification.cleanup(now + verification.RETENTION, clientFor(guild)));
+  assert.ok(result >= 3);
+  assert.equal(renamed.nickname, 'My own nickname', 'a nickname without the RoVer username is left alone');
+  assert.equal(locked.nickname, 'Whitee (@locked_case)');
+  assert.deepEqual(lines, [`Failed to restore the nickname of ${locked.id}: Missing Permissions`]);
+  assert.ok(!lines.join(' ').includes('locked_case'));
+  for (const member of [renamed, left, locked]) assert.equal(verifications.findByDiscord(member.id), undefined, 'data is removed even when the nickname cannot be restored');
+
+  const soon = join(guild);
+  soon.nickname = 'Soon';
+  verifications.link({ discordId: soon.id, robloxId: '2699', robloxUsername: 'soon_case', guildId: guild.id, expiresAt: Date.now() + 30 * 60_000 });
+  soon.nickname = 'Whitee (@soon_case)';
+  verifications.manageNickname(soon.id, 'Soon');
+  verification.startCleanup(clientFor(guild));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(soon.nickname, 'Soon', 'the scheduled cleanup restores nicknames too');
+});

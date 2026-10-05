@@ -8,6 +8,7 @@ const { panelComponents, consentMessage, alreadyVerifiedEmbed, resultEmbed, logE
 
 const MEMBER_ROLE = '1555596685462479048';
 const NICKNAME_LIMIT = 32;
+const ROBLOX_SUFFIX = / \(@[A-Za-z0-9_]{3,20}\)$/;
 const COOLDOWN = 10_000;
 const RETENTION = 30 * 24 * 60 * 60_000;
 const CLEANUP_INTERVAL = 60 * 60_000;
@@ -72,15 +73,29 @@ const assignRole = async (guild, member) => {
 
 const updateNickname = async (guild, member, robloxUsername) => {
   const nickname = buildNickname(member.user.globalName ?? member.user.username, robloxUsername);
-  if (member.nickname === nickname) return { ok: true, nickname };
+  const previous = ROBLOX_SUFFIX.test(member.nickname ?? '') ? null : member.nickname;
+  if (member.nickname === nickname) {
+    verifications.manageNickname(member.id, previous);
+    return { ok: true, nickname };
+  }
   if (member.id === guild.ownerId) return { ok: false, reason: "Discord does not allow bots to change the server owner's nickname." };
   try {
     await member.setNickname(nickname, 'Roblox verification');
+    verifications.manageNickname(member.id, previous);
     return { ok: true, nickname };
   } catch (error) {
     console.error(`Failed to update the nickname of ${member.id}: ${error.message}`);
     return { ok: false, reason: failureReason(error, "The bot is missing the Manage Nicknames permission or your highest role is above the bot's.") };
   }
+};
+
+const restoreNickname = async (guild, record) => {
+  if (!guild || !record.nickname_managed) return;
+  const member = await guild.members.fetch({ user: record.discord_id, force: true }).catch(() => null);
+  if (!member?.nickname?.endsWith(` (@${record.roblox_username})`) || member.id === guild.ownerId) return;
+  await member.setNickname(record.previous_nickname, 'Roblox verification data removed').catch((error) => {
+    console.error(`Failed to restore the nickname of ${member.id}: ${error.message}`);
+  });
 };
 
 const applyMemberUpdates = async (guild, discordId, robloxUsername) => {
@@ -145,21 +160,22 @@ const failure = (error, replace, now) => {
   return ERRORS[error.kind] ?? UNAVAILABLE;
 };
 
-const find = async (guildId, discordId) => {
+const find = async (guild, discordId) => {
   try {
-    return { account: await rover.lookup(settings, guildId, discordId) };
+    return { account: await rover.lookup(settings, guild.id, discordId) };
   } catch (error) {
     if (!(error instanceof rover.RoverError) || error.kind !== 'user_not_found') throw error;
   }
-  verifications.removeExpiring(discordId);
-  const access = await rover.requestAccess(settings, guildId, discordId);
-  return access === 'authorized' ? { account: await rover.lookup(settings, guildId, discordId) } : { access };
+  const removed = verifications.removeExpiring(discordId);
+  if (removed) await restoreNickname(guild, removed);
+  const access = await rover.requestAccess(settings, guild.id, discordId);
+  return access === 'authorized' ? { account: await rover.lookup(settings, guild.id, discordId) } : { access };
 };
 
 const verify = async (interaction, replace, now) => {
   let found;
   try {
-    found = await find(interaction.guildId, interaction.user.id);
+    found = await find(interaction.guild, interaction.user.id);
   } catch (error) {
     return failure(error, replace, now);
   }
@@ -212,10 +228,14 @@ const start = async (interaction, { replace = false, update = false, now = Date.
   return interaction.editReply(await serialize(interaction.user.id, () => verify(interaction, replace, now)));
 };
 
-const cleanup = (now = Date.now()) => verifications.purgeExpired(now);
+const cleanup = async (now = Date.now(), client = null) => {
+  const expired = verifications.purgeExpired(now);
+  for (const record of expired) await restoreNickname(client?.guilds.cache.get(record.guild_id), record);
+  return expired.length;
+};
 
-const startCleanup = () => {
-  const run = () => cleanup(Date.now() + CLEANUP_INTERVAL);
+const startCleanup = (client) => {
+  const run = () => cleanup(Date.now() + CLEANUP_INTERVAL, client).catch((error) => console.error(`Failed to remove expired verification data: ${error.message}`));
   run();
   setInterval(run, CLEANUP_INTERVAL).unref();
 };
