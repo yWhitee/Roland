@@ -1,7 +1,7 @@
 const { MessageFlags, PermissionFlagsBits } = require('discord.js');
 const jsonImport = require('./jsonImport');
 const sessions = require('./sessions');
-const { SECTIONS, panel, sectionModal, fieldModal, importModal } = require('./panel');
+const { SECTIONS, panel, sectionModal, fieldModal, importModal, pasteModal } = require('./panel');
 const { errorEmbed } = require('../../utils/embeds');
 const { UserError, userMessage } = require('../../utils/errors');
 
@@ -47,6 +47,17 @@ const saveField = (interaction, session, index) => {
   return interaction.update(panel(session));
 };
 
+const load = async (interaction, session, source, { fail, show }) => {
+  let imported;
+  try {
+    imported = await source();
+    sessions.update(sessions.get(session.id, interaction.user.id), imported.state);
+  } catch (error) {
+    return fail({ embeds: [errorEmbed(userMessage(error))], flags: MessageFlags.Ephemeral });
+  }
+  return show(panel(session, 'main', `✅ Imported ${imported.source}. Review and edit it below, then press **Send**. Nothing has been sent yet.`));
+};
+
 const actions = {
   section: (interaction, session, key) => interaction.showModal(sectionModal(session, key)),
   modal: (interaction, session, key) => {
@@ -70,15 +81,17 @@ const actions = {
   import: (interaction, session) => interaction.showModal(importModal(session)),
   importfile: async (interaction, session) => {
     await interaction.deferUpdate();
-    let imported;
-    try {
-      imported = await jsonImport.read(interaction.fields.getUploadedFiles('file'));
-      sessions.update(sessions.get(session.id, interaction.user.id), imported.state);
-    } catch (error) {
-      return interaction.followUp({ embeds: [errorEmbed(userMessage(error))], flags: MessageFlags.Ephemeral });
-    }
-    return interaction.editReply(panel(session, 'main', `✅ Imported \`${imported.name}\`. Review and edit it below, then press **Send**. Nothing has been sent yet.`));
+    return load(interaction, session, () => jsonImport.read(interaction.fields.getUploadedFiles('file')), {
+      fail: (payload) => interaction.followUp(payload),
+      show: (payload) => interaction.editReply(payload),
+    });
   },
+  paste: (interaction, session) => interaction.showModal(pasteModal(session)),
+  pastejson: (interaction, session) =>
+    load(interaction, session, () => jsonImport.paste(interaction.fields.getTextInputValue('json')), {
+      fail: (payload) => interaction.reply(payload),
+      show: (payload) => interaction.update(payload),
+    }),
   timestamp: (interaction, session) => {
     session.state.timestamp = !session.state.timestamp;
     return interaction.update(panel(session));

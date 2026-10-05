@@ -12,7 +12,7 @@ const {
   TextInputBuilder,
   TextInputStyle,
 } = require('discord.js');
-const { MAX_BYTES } = require('./jsonImport');
+const { MAX_BYTES, MAX_PASTE } = require('./jsonImport');
 const { MAX_FIELDS, toEmbed, isEmpty } = require('./sessions');
 
 const SECTIONS = {
@@ -96,12 +96,12 @@ const components = (session, view) => {
       button(session, 'timestamp', `Timestamp: ${timestamp ? 'on' : 'off'}`),
     ),
     row(
-      button(session, 'import', 'Import JSON'),
       button(session, 'preview', 'Preview'),
       button(session, 'reset', 'Clear', ButtonStyle.Danger),
       button(session, 'send', 'Send', ButtonStyle.Success),
       button(session, 'cancel', 'Cancel', ButtonStyle.Danger),
     ),
+    row(button(session, 'import', 'Import JSON'), button(session, 'paste', 'Paste JSON')),
   ];
 };
 
@@ -161,4 +161,14 @@ const importModal = (session) =>
         .setFileUploadComponent(new FileUploadBuilder().setCustomId('file').setMinValues(1).setMaxValues(1).setRequired(true)),
     );
 
-module.exports = { SECTIONS, panel, sectionModal, fieldModal, importModal };
+const pasteModal = (session) =>
+  new ModalBuilder()
+    .setCustomId(customId(session, 'pastejson'))
+    .setTitle('Paste Embed JSON')
+    .addLabelComponents(
+      textInput('json', 'JSON', { max: MAX_PASTE, style: TextInputStyle.Paragraph, placeholder: '{ "embed": { "title": "Hello" } }', required: true }).setDescription(
+        `Paste the raw JSON object, up to ${MAX_PASTE} characters. For larger JSON, use Import JSON.`,
+      ),
+    );
+
+module.exports = { SECTIONS, panel, sectionModal, fieldModal, importModal, pasteModal };

@@ -2,9 +2,12 @@ const sessions = require('./sessions');
 const { UserError } = require('../../utils/errors');
 
 const MAX_BYTES = 64 * 1024;
+const MAX_PASTE = 4000;
 const DOWNLOAD_TIMEOUT = 10_000;
 const MAX_REPORTED = 10;
 const CDN_HOSTS = new Set(['cdn.discordapp.com', 'media.discordapp.net']);
+const FILE = 'The file';
+const PASTED = 'The pasted JSON';
 
 const KEYS = {
   root: ['content', 'embed'],
@@ -39,9 +42,8 @@ const reader = (errors) => {
     }
     for (const key of Object.keys(value)) {
       if (keys.includes(key)) continue;
-      const root = path === 'The file';
-      if (root && UNSUPPORTED.has(key)) errors.push(UNSUPPORTED.get(key));
-      else errors.push(`Unknown property "${root ? '' : `${path}.`}${shown(key)}". Supported: ${keys.join(', ')}.`);
+      if (!path && UNSUPPORTED.has(key)) errors.push(UNSUPPORTED.get(key));
+      else errors.push(`Unknown property "${path ? `${path}.` : ''}${shown(key)}". Supported: ${keys.join(', ')}.`);
     }
     return value;
   };
@@ -93,11 +95,11 @@ const reader = (errors) => {
   return { object, text, flag, color, fields };
 };
 
-const toState = (data) => {
+const toState = (data, source = FILE) => {
   const errors = [];
-  if (!isObject(data)) throw new UserError('The file must contain a JSON object, like { "embed": { "title": "Hello" } }.');
+  if (!isObject(data)) throw new UserError(`${source} must contain a JSON object, like { "embed": { "title": "Hello" } }.`);
   const read = reader(errors);
-  const root = read.object(data, 'The file', KEYS.root);
+  const root = read.object(data, null, KEYS.root);
   const embed = read.object(root.embed, 'embed', KEYS.embed);
   const author = read.object(embed.author, 'embed.author', KEYS.author);
   const footer = read.object(embed.footer, 'embed.footer', KEYS.footer);
@@ -125,19 +127,33 @@ const toState = (data) => {
   if (errors.length) {
     const listed = errors.slice(0, MAX_REPORTED).map((error) => `• ${error}`);
     if (errors.length > MAX_REPORTED) listed.push(`• …and ${errors.length - MAX_REPORTED} more.`);
-    throw new UserError(['The file was not imported:', ...listed].join('\n'));
+    throw new UserError([`${source} was not imported:`, ...listed].join('\n'));
   }
   return state;
 };
 
-const parse = (text) => {
+const parseJson = (text, source) => {
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new UserError(`${source} is not valid JSON: ${error.message.slice(0, 200)}`);
+  }
+};
+
+const parse = (text, source = FILE) => toState(parseJson(text, source), source);
+
+const paste = (text) => {
+  if (typeof text !== 'string' || !text.trim()) throw new UserError('Nothing was pasted. Paste a JSON object like { "embed": { "title": "Hello" } }.');
+  const modalLimit = `Discord modals accept at most ${MAX_PASTE} characters. For larger JSON, use Import JSON and upload it as a .json file.`;
+  if (text.length > MAX_PASTE) throw new UserError(`The pasted JSON is too large (${text.length} characters). ${modalLimit}`);
   let data;
   try {
-    data = JSON.parse(text);
+    data = parseJson(text, PASTED);
   } catch (error) {
-    throw new UserError(`The file is not valid JSON: ${error.message.slice(0, 200)}`);
+    if (text.length === MAX_PASTE) throw new UserError(`The pasted JSON reached the ${MAX_PASTE}-character limit and was probably cut off by Discord. ${modalLimit}`);
+    throw error;
   }
-  return toState(data);
+  return { source: 'the pasted JSON', state: toState(data, PASTED) };
 };
 
 const tooLarge = () => new UserError(`The file is larger than ${MAX_BYTES / 1024} KB.`);
@@ -193,7 +209,7 @@ const read = async (files) => {
 
   const text = decode(await download(file.url));
   if (!text.trim()) throw new UserError(`"${name}" is empty.`);
-  return { name, state: parse(text) };
+  return { source: `\`${name}\``, state: parse(text) };
 };
 
-module.exports = { MAX_BYTES, configure, toState, parse, read };
+module.exports = { MAX_BYTES, MAX_PASTE, configure, toState, parse, read, paste };

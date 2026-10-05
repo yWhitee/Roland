@@ -1,17 +1,22 @@
-# Importar JSON no Embed Builder
+# Importar ou colar JSON no Embed Builder
 
 Disponível em `/embed`, `/createverify` (tipo `custom`) e `/ticketcreate`.
 
 1. Abra o editor com um desses comandos.
-2. Clique em **Import JSON** e anexe um arquivo `.json`.
-3. O editor é preenchido com o conteúdo do arquivo. Nada é enviado.
+2. Escolha uma das opções:
+   - **Import JSON**: anexe um arquivo `.json`.
+   - **Paste JSON**: cole o JSON direto na caixa de texto.
+3. O editor é preenchido com o conteúdo. Nada é enviado.
 4. Revise, edite com os botões normais e clique em **Send**.
 
-A importação substitui tudo o que estava no editor. Campos ausentes ficam vazios, como depois de **Clear**.
+As duas opções aceitam exatamente o mesmo formato e passam pelas mesmas validações.
 
-## Arquivo
+A importação substitui tudo o que estava no editor. Campos ausentes ficam vazios, como depois de **Clear**. Se houver erro, o editor continua como estava.
 
-- Extensão `.json`, texto UTF-8, até 64 KB, um arquivo por vez.
+## Entrada
+
+- **Import JSON:** extensão `.json`, texto UTF-8, até 64 KB, um arquivo por vez.
+- **Paste JSON:** até 4000 caracteres, o limite do Discord para caixas de texto em modais. O JSON nunca é cortado nem alterado pelo Roland. Se passar do limite, ou se o Discord cortar o texto colado, a importação é recusada; use **Import JSON** nesse caso. Um embed perto do limite de 6000 caracteres só cabe como arquivo.
 - Precisa ser um objeto JSON válido.
 - Propriedades desconhecidas são rejeitadas, com o caminho exato (ex.: `embed.fields[2].foo`).
 - `null` ou ausente significa "não definido". Textos são aparados (`trim`).
