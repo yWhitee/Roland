@@ -172,6 +172,16 @@ const migrations = [
   UPDATE verifications SET nickname_managed = 1 WHERE expires_at IS NOT NULL;`,
   `ALTER TABLE verifications ADD COLUMN nickname_username TEXT;
   UPDATE verifications SET nickname_username = roblox_username WHERE nickname_managed = 1;`,
+  `CREATE TABLE no_messages (
+    guild_id TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    enabled INTEGER NOT NULL,
+    enabled_at INTEGER,
+    updated_by TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (guild_id, channel_id)
+  );`,
 ];
 
 let db;

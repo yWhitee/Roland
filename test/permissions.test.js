@@ -50,6 +50,7 @@ test('command permission matrix', () => {
     unmute: ['senior', 'admin', 'owner'],
     embed: ['senior', 'admin', 'owner'],
     logs: ['admin', 'owner'],
+    nomessages: ['admin', 'owner'],
     ticketcreate: ['admin', 'owner'],
     createverify: ['owner'],
     verifyinfo: ['moderator', 'senior', 'admin', 'owner'],
