@@ -39,11 +39,11 @@ const linkMessage = (lines, relink = false) => ({
   ],
 });
 
-const alreadyVerifiedEmbed = (verification) =>
+const alreadyVerifiedEmbed = (verification, lines = []) =>
   new EmbedBuilder()
     .setColor(Colors.info)
     .setTitle('You are already verified')
-    .setDescription(`Roblox username: **${verification.roblox_username}**`);
+    .setDescription([`Roblox username: **${verification.roblox_username}**`, ...(lines.length ? ['', ...lines] : [])].join('\n'));
 
 const resultEmbed = ({ title, lines, success }) =>
   new EmbedBuilder()
@@ -57,8 +57,12 @@ const logEmbed = (verification, updates, changed = false) =>
     .setTitle(changed ? 'Verification • Roblox account changed' : 'Verification • Roblox account linked')
     .addFields(
       { name: 'Discord user', value: `<@${verification.discord_id}> (\`${verification.discord_id}\`)` },
-      { name: 'Member role', value: updates.role?.ok ? 'Assigned' : 'Not assigned', inline: true },
-      { name: 'Nickname', value: updates.nickname?.kept ? 'Kept' : updates.nickname?.ok ? 'Updated' : 'Not updated', inline: true },
+      { name: 'Member role', value: updates.role?.ok ? 'Assigned' : `Not assigned${updates.role?.reason ? `: ${updates.role.reason}` : ''}`.slice(0, 1024), inline: true },
+      {
+        name: 'Nickname',
+        value: updates.nickname?.kept ? 'Kept' : updates.nickname?.ok ? 'Updated' : `Not updated${updates.nickname?.reason ? `: ${updates.nickname.reason}` : ''}`.slice(0, 1024),
+        inline: true,
+      },
       { name: 'Timestamp', value: fullTime(verification.verified_at) },
     )
     .setTimestamp(verification.verified_at);

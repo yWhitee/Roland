@@ -1,4 +1,4 @@
-const { MessageFlags, RESTJSONErrorCodes } = require('discord.js');
+const { MessageFlags, PermissionFlagsBits, RESTJSONErrorCodes } = require('discord.js');
 const verificationPanels = require('../../database/verificationPanels');
 const verifications = require('../../database/verifications');
 const logging = require('../logging');
@@ -61,6 +61,24 @@ const failureReason = (error, permission) => {
   return 'Discord rejected the change.';
 };
 
+const lacks = (me, permission) => Boolean(me?.permissions?.has) && !me.permissions.has(permission);
+
+const reaches = (role, me) => Boolean(role && me?.roles?.highest) && role.position >= me.roles.highest.position;
+
+const roleProblem = (guild) => {
+  const me = guild.members.me;
+  if (lacks(me, PermissionFlagsBits.ManageRoles)) return 'Roland is missing the Manage Roles permission.';
+  if (reaches(guild.roles.cache.get(MEMBER_ROLE), me)) return "The Member role is at or above Roland's highest role. A server admin must move Roland's role above Member in Server Settings → Roles.";
+  return "The bot is missing the Manage Roles permission or the Member role is above the bot's highest role.";
+};
+
+const nicknameProblem = (guild, member) => {
+  const me = guild.members.me;
+  if (lacks(me, PermissionFlagsBits.ManageNicknames)) return 'Roland is missing the Manage Nicknames permission.';
+  if (reaches(member.roles?.highest, me)) return "Your highest role is at or above Roland's highest role, so Discord does not let Roland change your nickname. A server admin must move Roland's role higher.";
+  return "The bot is missing the Manage Nicknames permission or your highest role is above the bot's.";
+};
+
 const assignRole = async (guild, member) => {
   if (member.roles.cache.has(MEMBER_ROLE)) return { ok: true };
   if (!guild.roles.cache.has(MEMBER_ROLE)) return { ok: false, reason: 'The Member role no longer exists.' };
@@ -69,7 +87,7 @@ const assignRole = async (guild, member) => {
     return { ok: true };
   } catch (error) {
     console.error(`Failed to assign the Member role to ${member.id}: ${error.message}`);
-    return { ok: false, reason: failureReason(error, "The bot is missing the Manage Roles permission or the Member role is above the bot's highest role.") };
+    return { ok: false, reason: failureReason(error, roleProblem(guild)) };
   }
 };
 
@@ -95,7 +113,7 @@ const setManagedNickname = async (guild, member, record, previous) => {
   } catch (error) {
     verifications.resetNickname(member.id, record);
     console.error(`Failed to update the nickname of ${member.id}: ${error.message}`);
-    return { ok: false, reason: failureReason(error, "The bot is missing the Manage Nicknames permission or your highest role is above the bot's.") };
+    return { ok: false, reason: failureReason(error, nicknameProblem(guild, member)) };
   }
 };
 
@@ -119,15 +137,32 @@ const restoreNickname = async (guild, record) => {
   });
 };
 
-const applyMemberUpdates = async (guild, record, accountChanged) => {
-  const member = await guild.members.fetch({ user: record.discord_id, force: true }).catch((error) => {
+const refreshNickname = (guild, member, record) =>
+  record.nickname_managed === MANAGED && record.nickname_username && !member.nickname
+    ? setManagedNickname(guild, member, record, record.previous_nickname)
+    : updateNickname(guild, member, record, false);
+
+const fetchMember = (guild, discordId) =>
+  guild.members.fetch({ user: discordId, force: true }).catch((error) => {
     if (error.status === 404 || error.code === RESTJSONErrorCodes.UnknownMember) return null;
     throw error;
   });
+
+const applyMemberUpdates = async (guild, record, accountChanged) => {
+  const member = await fetchMember(guild, record.discord_id);
   if (!member) return { member: null };
 
   return { member, role: await assignRole(guild, member), nickname: await updateNickname(guild, member, record, accountChanged) };
 };
+
+const reapply = (guild, discordId) =>
+  serialize(discordId, async () => {
+    const record = verifications.findByDiscord(discordId);
+    if (!record) return null;
+    const member = await fetchMember(guild, discordId);
+    if (!member) return { member: null };
+    return { member, role: await assignRole(guild, member), nickname: await refreshNickname(guild, member, record) };
+  });
 
 const isValid = (record, now) => record.expires_at === null || record.expires_at > now;
 
@@ -273,9 +308,10 @@ const verify = async (interaction, replace, now, retry) => {
 const start = async (interaction, { replace = false, update = false, now = Date.now() } = {}) => {
   const existing = verifications.findByDiscord(interaction.user.id);
   if (existing && !replace) {
-    await interaction.reply({ embeds: [alreadyVerifiedEmbed(existing)], flags: MessageFlags.Ephemeral });
-    if (isValid(existing, now) && interaction.member) await assignRole(interaction.guild, interaction.member);
-    return undefined;
+    if (!isValid(existing, now)) return interaction.reply({ embeds: [alreadyVerifiedEmbed(existing)], flags: MessageFlags.Ephemeral });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const updates = await reapply(interaction.guild, interaction.user.id);
+    return interaction.editReply({ embeds: [alreadyVerifiedEmbed(existing, updates ? describeUpdates(updates) : [])] });
   }
   if (!settings) throw new UserError('Roblox verification is not configured yet. Please contact a server administrator.');
   if (now < blockedUntil) throw new UserError(`RoVer is receiving too many requests. Please try again ${relative(blockedUntil)}.`);

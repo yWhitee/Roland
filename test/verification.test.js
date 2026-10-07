@@ -396,10 +396,11 @@ test('already verified members see their linked account without a new lookup', a
   rover.accounts[member.id] = { id: '1005', username: 'linked_user' };
   await press(guild, member);
 
-  const { reply } = await press(guild, member);
-  assert.ok(reply.flags);
+  const { interaction, reply } = await press(guild, member);
+  assert.ok(interaction.calls.deferred.flags, 'the answer is private');
   assert.equal(embedOf(reply).title, 'You are already verified');
   assert.match(embedOf(reply).description, /linked_user/);
+  assert.match(embedOf(reply).description, /You have been given the Member role\.\nYour server nickname has been updated\./);
   assert.equal(rover.calls.length, 1);
 });
 
@@ -1283,8 +1284,100 @@ test('the panel restores Member for a verified member whose join was missed', as
   const { reply } = await press(guild, back);
   assert.equal(embedOf(reply).title, 'You are already verified');
   assert.ok(back.roles.cache.has(MEMBER_ROLE));
+  assert.equal(back.nickname, 'Whitee (@PanelRBX)', 'the nickname comes back too');
   assert.equal(rover.calls.length, calls);
   assert.equal(rows(member.id), 1);
+});
+
+test('verifying gives the Member role and the nickname "Discord display name (@RobloxUsername)"', async () => {
+  const { guild, rover } = setup();
+  const member = join(guild, { globalName: 'Whitee' });
+  member.nickname = 'old nick';
+  rover.accounts[member.id] = { id: '7001', username: 'TWhiteeT' };
+  const { reply } = await press(guild, member);
+  assert.ok(member.roles.cache.has(MEMBER_ROLE));
+  assert.equal(member.nickname, 'Whitee (@TWhiteeT)');
+  assert.match(embedOf(reply).description, /You have been given the Member role\.\nYour server nickname has been updated\./);
+  const log = Object.fromEntries(embedOf(guild.logChannel.sent.at(-1)).fields.map((field) => [field.name, field.value]));
+  assert.deepEqual([log['Member role'], log.Nickname], ['Assigned', 'Updated']);
+});
+
+test('a verified member whose role or nickname failed gets them on the next panel click, with the result shown', async () => {
+  const { guild, rover } = setup();
+  const member = join(guild);
+  rover.accounts[member.id] = { id: '7002', username: 'RetryRBX' };
+  const add = member.roles.add;
+  const rename = member.setNickname;
+  member.roles.add = async () => Promise.reject(Object.assign(new Error('Missing Permissions'), { code: 50013 }));
+  member.setNickname = async () => Promise.reject(Object.assign(new Error('Missing Permissions'), { code: 50013 }));
+  const original = console.error;
+  console.error = () => {};
+  try {
+    await press(guild, member);
+  } finally {
+    console.error = original;
+  }
+  assert.ok(!member.roles.cache.has(MEMBER_ROLE));
+  assert.equal(member.nickname, null);
+
+  Object.assign(member, { setNickname: rename });
+  member.roles.add = add;
+  const calls = rover.calls.length;
+  const { reply } = await press(guild, member);
+  assert.equal(embedOf(reply).title, 'You are already verified');
+  assert.match(embedOf(reply).description, /You have been given the Member role\.\nYour server nickname has been updated\./);
+  assert.ok(member.roles.cache.has(MEMBER_ROLE));
+  assert.equal(member.nickname, 'Whitee (@RetryRBX)');
+  assert.equal(rover.calls.length, calls, 'RoVer is not queried again');
+
+  member.nickname = 'My own name';
+  const kept = await press(guild, member);
+  assert.match(embedOf(kept.reply).description, /Your server nickname was kept because you changed it\./);
+  assert.equal(member.nickname, 'My own name');
+});
+
+test('role and nickname failures name the exact cause: permission, role order or server owner', async () => {
+  const { PermissionsBitField, PermissionFlagsBits: P } = require('discord.js');
+  const denied = () => Promise.reject(Object.assign(new Error('Missing Permissions'), { code: 50013 }));
+  const quietly = async (task) => {
+    const original = console.error;
+    console.error = () => {};
+    try {
+      return await task();
+    } finally {
+      console.error = original;
+    }
+  };
+  const attempt = async (configure) => {
+    const { guild, rover } = setup();
+    guild.members.me.permissions = new PermissionsBitField([P.ManageRoles, P.ManageNicknames]);
+    guild.members.me.roles.highest = { position: 10 };
+    guild.roles.cache.get(MEMBER_ROLE).position = 2;
+    const member = join(guild);
+    member.roles.highest = { position: 1 };
+    member.roles.add = denied;
+    member.setNickname = denied;
+    rover.accounts[member.id] = { id: String(7100 + Math.floor(Math.random() * 800)), username: 'CauseRBX' };
+    configure(guild, member);
+    const { reply } = await quietly(() => press(guild, member));
+    return { text: embedOf(reply).description, log: Object.fromEntries(embedOf(guild.logChannel.sent.at(-1)).fields.map((field) => [field.name, field.value])) };
+  };
+
+  const noPermissions = await attempt((guild) => (guild.members.me.permissions = new PermissionsBitField()));
+  assert.match(noPermissions.text, /Member role could not be assigned: Roland is missing the Manage Roles permission\./);
+  assert.match(noPermissions.text, /nickname could not be updated: Roland is missing the Manage Nicknames permission\./);
+  assert.match(noPermissions.log['Member role'], /^Not assigned: Roland is missing the Manage Roles permission\.$/);
+  assert.match(noPermissions.log.Nickname, /^Not updated: Roland is missing the Manage Nicknames permission\.$/);
+
+  const order = await attempt((guild, member) => {
+    guild.roles.cache.get(MEMBER_ROLE).position = 10;
+    member.roles.highest = { position: 12 };
+  });
+  assert.match(order.text, /The Member role is at or above Roland's highest role\. A server admin must move Roland's role above Member/);
+  assert.match(order.text, /Your highest role is at or above Roland's highest role, so Discord does not let Roland change your nickname/);
+
+  const owner = await attempt((guild, member) => (guild.ownerId = member.id));
+  assert.match(owner.text, /Discord does not allow bots to change the server owner's nickname/);
 });
 
 test('concurrent verifications and a join for the same member are applied one at a time', async () => {
