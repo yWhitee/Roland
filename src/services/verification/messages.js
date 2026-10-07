@@ -60,7 +60,7 @@ const logEmbed = (verification, updates, changed = false) =>
       { name: 'Member role', value: updates.role?.ok ? 'Assigned' : `Not assigned${updates.role?.reason ? `: ${updates.role.reason}` : ''}`.slice(0, 1024), inline: true },
       {
         name: 'Nickname',
-        value: updates.nickname?.kept ? 'Kept' : updates.nickname?.ok ? 'Updated' : `Not updated${updates.nickname?.reason ? `: ${updates.nickname.reason}` : ''}`.slice(0, 1024),
+        value: updates.nickname?.ok ? 'Updated' : `Not updated${updates.nickname?.reason ? `: ${updates.nickname.reason}` : ''}`.slice(0, 1024),
         inline: true,
       },
       { name: 'Timestamp', value: fullTime(verification.verified_at) },

@@ -1134,7 +1134,7 @@ test('an interruption between saving the state and changing the nickname is reco
   assert.deepEqual([stored.nickname_managed, stored.previous_nickname, stored.nickname_username], [1, 'Original', 'retry_name']);
 });
 
-test('a nickname changed by the member survives /verify with the same account and expiry', async () => {
+test('/verify always gives Member and the verified nickname, even after the member changed them', async () => {
   const { guild, rover } = setup();
   const member = join(guild);
   member.nickname = 'Before';
@@ -1143,16 +1143,21 @@ test('a nickname changed by the member survives /verify with the same account an
   assert.equal(member.nickname, 'Whitee (@WhiteeRBX)');
 
   member.nickname = 'The Goat';
-  const again = await verifyAs(guild, rover, member, account, { replace: true });
-  assert.equal(member.nickname, 'The Goat');
-  assert.match(embedOf(again.calls.replies[0]).description, /Your server nickname was kept because you changed it\./);
+  member.roles.cache.delete(MEMBER_ROLE);
+  const command = await verifyAs(guild, rover, member, account, { replace: true });
+  const reply = command.calls.replies.at(-1);
+  assert.equal(embedOf(reply).title, 'You are already verified');
+  assert.match(embedOf(reply).description, /You have been given the Member role\.\nYour server nickname has been updated\./);
+  assert.equal(member.nickname, 'Whitee (@WhiteeRBX)');
+  assert.ok(member.roles.cache.has(MEMBER_ROLE));
   const stored = verifications.findByDiscord(member.id);
-  assert.deepEqual([stored.nickname_managed, stored.previous_nickname, stored.nickname_username], [1, 'Before', null]);
+  assert.deepEqual([stored.nickname_managed, stored.previous_nickname, stored.nickname_username], [1, 'The Goat', 'WhiteeRBX']);
 
   await verifyAs(guild, rover, member, account, { replace: true });
-  assert.equal(member.nickname, 'The Goat', 'still kept on the next /verify');
-  await verification.cleanup(stored.expires_at, clientFor(guild));
-  assert.equal(member.nickname, 'The Goat', 'expiry keeps the manual nickname');
+  assert.equal(member.nickname, 'Whitee (@WhiteeRBX)');
+  assert.equal(verifications.findByDiscord(member.id).previous_nickname, 'The Goat', 'a repeated /verify keeps the nickname to restore');
+  await verification.cleanup(verifications.findByDiscord(member.id).expires_at, clientFor(guild));
+  assert.equal(member.nickname, 'The Goat', 'expiry restores the nickname the member had before verifying again');
 });
 
 test('a nickname that still shows the Roblox username is restored on expiry', async () => {
@@ -1267,7 +1272,7 @@ test('joining does nothing for unverified or expired members and only restores M
   const manual = join(guild);
   await verifyAs(guild, rover, manual, { id: '5002', username: 'ManualRBX' });
   manual.nickname = 'The Goat';
-  await verifyAs(guild, rover, manual, { id: '5002', username: 'ManualRBX' }, { replace: true });
+  verifications.resetNickname(manual.id, { nickname_managed: 1, previous_nickname: null, nickname_username: null });
   const returned = rejoin(guild, manual);
   await verification.handleJoin(returned);
   assert.ok(returned.roles.cache.has(MEMBER_ROLE));
@@ -1331,9 +1336,11 @@ test('a verified member whose role or nickname failed gets them on the next pane
   assert.equal(rover.calls.length, calls, 'RoVer is not queried again');
 
   member.nickname = 'My own name';
-  const kept = await press(guild, member);
-  assert.match(embedOf(kept.reply).description, /Your server nickname was kept because you changed it\./);
-  assert.equal(member.nickname, 'My own name');
+  member.roles.cache.delete(MEMBER_ROLE);
+  const again = await press(guild, member);
+  assert.match(embedOf(again.reply).description, /You have been given the Member role\.\nYour server nickname has been updated\./);
+  assert.ok(member.roles.cache.has(MEMBER_ROLE));
+  assert.equal(member.nickname, 'Whitee (@RetryRBX)', 'every verification applies the nickname');
 });
 
 test('role and nickname failures name the exact cause: permission, role order or server owner', async () => {

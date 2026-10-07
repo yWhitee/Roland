@@ -117,16 +117,13 @@ const setManagedNickname = async (guild, member, record, previous) => {
   }
 };
 
-const updateNickname = async (guild, member, record, accountChanged) => {
-  if (record.nickname_managed === MANAGED && !showsManaged(record, member.nickname)) {
-    if (!accountChanged) {
-      verifications.resetNickname(member.id, { ...record, nickname_username: null });
-      return { ok: true, kept: true };
-    }
-    return setManagedNickname(guild, member, record, unmanaged(member.nickname));
-  }
-  return setManagedNickname(guild, member, record, record.nickname_managed ? record.previous_nickname : unmanaged(member.nickname));
+const previousFor = (record, member) => {
+  if (!record.nickname_managed) return unmanaged(member.nickname);
+  if (record.nickname_managed === PENDING || showsManaged(record, member.nickname) || (!member.nickname && record.nickname_username)) return record.previous_nickname;
+  return unmanaged(member.nickname);
 };
+
+const applyNickname = (guild, member, record) => setManagedNickname(guild, member, record, previousFor(record, member));
 
 const restoreNickname = async (guild, record) => {
   if (!guild || !record.nickname_managed) return;
@@ -137,31 +134,23 @@ const restoreNickname = async (guild, record) => {
   });
 };
 
-const refreshNickname = (guild, member, record) =>
-  record.nickname_managed === MANAGED && record.nickname_username && !member.nickname
-    ? setManagedNickname(guild, member, record, record.previous_nickname)
-    : updateNickname(guild, member, record, false);
-
 const fetchMember = (guild, discordId) =>
   guild.members.fetch({ user: discordId, force: true }).catch((error) => {
     if (error.status === 404 || error.code === RESTJSONErrorCodes.UnknownMember) return null;
     throw error;
   });
 
-const applyMemberUpdates = async (guild, record, accountChanged) => {
+const applyMemberUpdates = async (guild, record) => {
   const member = await fetchMember(guild, record.discord_id);
   if (!member) return { member: null };
 
-  return { member, role: await assignRole(guild, member), nickname: await updateNickname(guild, member, record, accountChanged) };
+  return { member, role: await assignRole(guild, member), nickname: await applyNickname(guild, member, record) };
 };
 
 const reapply = (guild, discordId) =>
   serialize(discordId, async () => {
     const record = verifications.findByDiscord(discordId);
-    if (!record) return null;
-    const member = await fetchMember(guild, discordId);
-    if (!member) return { member: null };
-    return { member, role: await assignRole(guild, member), nickname: await refreshNickname(guild, member, record) };
+    return record ? applyMemberUpdates(guild, record) : null;
   });
 
 const isValid = (record, now) => record.expires_at === null || record.expires_at > now;
@@ -231,11 +220,7 @@ const describeUpdates = (updates) => {
   if (!updates.member) return ['You are no longer a member of the server, so the Member role and nickname could not be applied.'];
   return [
     updates.role.ok ? 'You have been given the Member role.' : `The Member role could not be assigned: ${updates.role.reason}`,
-    updates.nickname.kept
-      ? 'Your server nickname was kept because you changed it.'
-      : updates.nickname.ok
-        ? 'Your server nickname has been updated.'
-        : `Your nickname could not be updated: ${updates.nickname.reason}`,
+    updates.nickname.ok ? 'Your server nickname has been updated.' : `Your nickname could not be updated: ${updates.nickname.reason}`,
   ];
 };
 
@@ -292,7 +277,7 @@ const verify = async (interaction, replace, now, retry) => {
     return result('Verification failed', [`Your Discord account is already verified with another Roblox account (${verification.roblox_username}).`]);
   }
 
-  const updates = await applyMemberUpdates(interaction.guild, verification, status === 'relinked');
+  const updates = await applyMemberUpdates(interaction.guild, verification);
   if (status !== 'already-verified') await logging.sendEmbed(interaction.guild, logEmbed(verification, updates, Boolean(previous)));
 
   const titles = { linked: 'Verification successful', relinked: 'Roblox account updated', 'already-verified': 'You are already verified' };
